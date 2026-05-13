@@ -1,0 +1,26 @@
+# 80 — Glossary
+
+Status: draft v1 · Owner: tfparser-core
+
+Terms in this codebase / docs that are overloaded across the Terraform / Terragrunt / data-engineering / Rust worlds, with the *meaning we commit to*. Defines only the ambiguous ones — generic words (function, struct, module-as-in-Rust-module) are not listed.
+
+| Term | Our meaning | Why it's overloaded |
+| ---- | ----------- | ------------------- |
+| **Workspace** | The whole TF *repository* (root directory the user points us at). Maps to `Workspace` in IR. | Terraform has "workspace" as a state-segregation concept (`terraform workspace`). Cargo has "workspace" for crate groups. We use it in the TF-repo sense; `Cargo.toml`'s `[workspace]` is called the *Cargo workspace* when disambiguation matters. |
+| **Component** | An `apply`-able directory: contains `terragrunt.hcl`, or `terraform { backend ... }`, or `resource` blocks at top level. Maps to `Component { kind: ComponentKind::Component }`. | Terraform docs call it a "root module"; Terragrunt docs call it a "unit"; Atlantis calls it a "stack"; some teams call it a "component." We pick **component** because it is the term used by the practitioners most likely to read this dataset (platform / infra engineers operating monorepos). |
+| **Module** | A directory of HCL that is **referenced** via `module "x" { source = "<this>" }` from a component or another module. Maps to `Component { kind: ComponentKind::Module }`. | Terraform: "child module" or "shared module." Rust: a code namespace. We mean the Terraform reusable-config sense exclusively. |
+| **Environment** | A named profile of values applied to components (e.g. `staging`, `production`). Maps to `Environment` struct. | Terraform: "workspace." Terragrunt: "environment." We use environment in the Terragrunt sense — that's what the user types. |
+| **Address** | The TF-style fully-qualified identifier `module.foo.aws_instance.bar[0]`. Maps to `Address` newtype. | Sometimes called "resource path." Address is the Terraform term; we adopt it. |
+| **Span** | Source-position triple `(file, byte_range, line, col)`. Maps to `Span` struct. | The compiler-community word; `proc_macro::Span` is the same shape. We carry our own because `hcl_edit::Span` is only `Range<usize>`. |
+| **Provider block / Provider ref / Provider source** | Three distinct things, all called "provider" in TF docs. **Block** = the `provider "aws" {}` declaration in a `.tf` file. **Ref** = the `provider = aws.alias` attribute on a resource. **Source** = the `source = "hashicorp/aws"` line in `required_providers` (the registry address). | These are different IR types; conflating them is the #1 reviewer confusion in early drafts. |
+| **Unresolved** | A symbolic reference (`var.x`, `local.y`, `aws_iam_role.r.arn`, `data.z.w`, `module.m.o`) that survives evaluation as `Expression::Unresolved`. *Not* an error. | "Symbolic", "deferred", "unknown" — all close. We picked **Unresolved** because it's what shows up in the API and the JSON sentinel. |
+| **Cascade** | The Terragrunt locals-merging chain (env → domain → domain-env → child). | Sometimes called "hierarchy" or "inheritance." We use **cascade** to make clear it's a value cascade, not a class hierarchy. |
+| **Profile** | The string name of an AWS credentials profile (`main-developer`). Maps to a key in `ProfileMap`. | Could be confused with AWS *IAM* role profile (CodeArtifact, OIDC). We always mean **AWS shared-config profile**. |
+| **Account** | A 12-digit AWS account identifier. Maps to `AccountId` newtype (`Box<str>` with `^\d{12}$`). | Sometimes "AWS organisation account" or "billing account." We mean the integer ID, full stop. |
+| **State backend** | The remote storage configuration for Terraform state — derived from `terraform { backend "s3" {} }` or from the `generate "backend" { contents = ... }` block. | Sometimes "state store." We use **state backend** as the IR field name. |
+| **Lowering** | Walking a parsed `hcl-edit` body and producing our IR types, dropping the source-tree node. | A compiler-community word; we use it precisely. Don't say "lowering" when you mean "evaluation." |
+| **Evaluation** | Reducing `Expression::*` to `Value` against an `EvalContext`. | Distinct from **lowering** (structural) and from **resolution** (`provider/account/region` filling). |
+| **Resolution** | The provider/account/region filling phase only. See [16-provider-resolver.md](./16-provider-resolver.md). | TF docs sometimes use "resolution" for `terraform plan`'s reference resolution; we mean the post-graph fill. |
+| **Expansion** | The graph-phase step that flattens module bodies and `count`/`for_each` into discrete `Resource` rows. | Sometimes "instantiation." We use **expansion** because that's what Terraform's own internal docs use. |
+| **Diagnostic** | A non-fatal warning attached to the IR (file too large, profile not mapped, parse-skip). Maps to `Diagnostic` struct. | `tracing` "events" or LSP "diagnostics" — different surfaces. We mean the IR-attached collection. |
+| **Pipeline** | The orchestrator that wires discovery → loader → terragrunt → eval → graph → provider → exporter. Maps to `tfparser_core::pipeline::Pipeline`. | Don't confuse with "data pipeline" in the Parquet/Spark sense. |
