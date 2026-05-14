@@ -771,6 +771,39 @@ fn build_generates(raw: &[parsed::GenerateBlockRaw]) -> Vec<GenerateBlock> {
         .collect()
 }
 
+/// Render a `generate "backend"` heredoc body for re-parsing as HCL.
+///
+/// Unlike [`render_expr_to_string`] (which keeps `${unresolved}` markers so
+/// the rendered string is faithful for storage), this drops unresolved
+/// segments entirely. The reason is positional: a placeholder like
+/// `${local.backend_profile_block}` sitting at HCL body level — between
+/// attributes, not inside a string — re-parses as a syntax error and pulls
+/// down the surrounding `terraform { backend "s3" { ... } }` block with it.
+/// Dropping the unresolved parts leaves static fields (kind, bucket,
+/// region, etc.) recoverable; the few attributes that lived entirely
+/// inside the interpolation are lost, which is the best we can do without
+/// running a real Terragrunt evaluation.
+fn render_contents_for_reparse(expr: &Expression) -> Option<Arc<str>> {
+    match expr {
+        Expression::Literal(Value::Str(s)) => Some(Arc::clone(s)),
+        Expression::TemplateConcat(parts) => {
+            let mut out = String::new();
+            for part in parts {
+                match part {
+                    Expression::Literal(Value::Str(s)) => out.push_str(s),
+                    Expression::Literal(Value::Int(n)) => out.push_str(&n.to_string()),
+                    Expression::Literal(Value::Bool(b)) => out.push_str(&b.to_string()),
+                    // Unresolved or other non-literal parts: dropped on
+                    // purpose; see fn-level docs.
+                    _ => {}
+                }
+            }
+            Some(Arc::from(out))
+        }
+        _ => None,
+    }
+}
+
 /// Render an expression as best-effort string for `generate` attribute
 /// capture. Literals collapse exactly; `TemplateConcat` parts render with
 /// `${unresolved-source}` markers for any non-literal subexpression.
@@ -862,10 +895,8 @@ fn extract_state_backend(
             continue;
         }
         let contents_str = g.attrs.iter().find_map(|(k, v)| {
-            if k.as_ref() == "contents"
-                && let Expression::Literal(Value::Str(s)) = v
-            {
-                return Some(s.clone());
+            if k.as_ref() == "contents" {
+                return render_contents_for_reparse(v);
             }
             None
         });
@@ -1339,6 +1370,61 @@ mod tests {
             .unwrap();
         assert_eq!(cfg.generates.len(), 1);
         assert_eq!(&*cfg.generates[0].label, "backend");
+    }
+
+    /// A `generate "backend"` heredoc whose `contents` body mixes static
+    /// HCL with `${...}` interpolations (e.g. `${path_relative_to_include()}`
+    /// inside the `key` attribute, plus a body-level `${local.x}` injection
+    /// line) must still surface a usable [`StateBackend`]. Before the fix,
+    /// `extract_state_backend` only accepted `Expression::Literal(Value::Str)`
+    /// for the heredoc and silently bailed when it lowered to
+    /// `TemplateConcat`, so every component that wired its backend through
+    /// a templated `generate` block came out empty.
+    #[test]
+    fn test_should_extract_backend_from_templated_generate_contents() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(tmp.path()).unwrap();
+        write_file(
+            &root,
+            "root.hcl",
+            "locals {\n  profile_block = \"\"\n}\ngenerate \"backend\" {\n  path = \
+             \"backend.tf\"\n  if_exists = \"overwrite_terragrunt\"\n  contents = \
+             <<EOF\nterraform {\n  backend \"s3\" {\n    bucket = \"my-tfstate\"\n    region = \
+             \"us-west-2\"\n    key    = \
+             \"acct/${path_relative_to_include()}.tfstate\"\n${local.profile_block}\n  \
+             }\n}\nEOF\n}\n",
+        );
+        write_file(
+            &root,
+            "svc/terragrunt.hcl",
+            "include \"root\" { path = find_in_parent_folders(\"root.hcl\") }\n",
+        );
+
+        let ctx = TgContext::new(Arc::from(root.as_path()));
+        let cfg = FsTerragruntResolver::new()
+            .resolve(&root.join("svc"), &ctx)
+            .unwrap();
+        let backend = cfg
+            .state_backend
+            .as_ref()
+            .expect("backend should be extracted from templated generate contents");
+        assert_eq!(&*backend.kind, "s3");
+        // The `region` is captured into the verbatim attribute map at
+        // this stage; the provider-resolver pass later promotes it onto
+        // `state_region` (see `provider::resolver`), so we assert at the
+        // attribute-map level here.
+        let attr_str = |name: &str| -> Option<Arc<str>> {
+            backend
+                .attributes
+                .iter()
+                .find(|(k, _)| &**k == name)
+                .and_then(|(_, v)| match v {
+                    Expression::Literal(Value::Str(s)) => Some(Arc::clone(s)),
+                    _ => None,
+                })
+        };
+        assert_eq!(attr_str("bucket").as_deref(), Some("my-tfstate"));
+        assert_eq!(attr_str("region").as_deref(), Some("us-west-2"));
     }
 
     #[test]

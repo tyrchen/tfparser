@@ -304,7 +304,7 @@ fn project_variable(block: &RawBlock) -> Option<Variable> {
                     description = Some(Arc::clone(s));
                 }
             }
-            "type" => type_expr = Some(value.clone()),
+            "type" => type_expr = Some(normalize_variable_type(value)),
             "default" => default = Some(value.clone()),
             "sensitive" => {
                 if let Expression::Literal(Value::Bool(b)) = value {
@@ -323,6 +323,53 @@ fn project_variable(block: &RawBlock) -> Option<Variable> {
             .sensitive(sensitive)
             .span(block.span.clone())
             .build(),
+    )
+}
+
+/// Normalize the RHS of `variable { type = ... }`.
+///
+/// HCL doesn't distinguish a bare type-constraint keyword (`string`,
+/// `number`, `bool`, `any`, `null`) from an identifier reference: both
+/// lower to `Expression::Unresolved(SymbolKind::Other, "<keyword>")`.
+/// In the specific position `variable { type = ... }` we know the RHS is
+/// a Terraform type constraint, so we hoist those keywords to a string
+/// literal — collapses thousands of noisy `Unresolved` markers in the
+/// exported `attributes_json` and gives consumers a usable type string.
+///
+/// Constructor-shaped forms (`list(string)`, `map(any)`,
+/// `object({foo = number})`) lower as function calls and object literals;
+/// we recurse into their arguments / values to normalize the inner
+/// keywords. The function name (`list`, `map`, ...) is left alone — it
+/// stays as a [`FuncCall::name`] string.
+fn normalize_variable_type(value: &Expression) -> Expression {
+    match value {
+        Expression::Unresolved(sym)
+            if sym.kind == SymbolKind::Other && is_terraform_type_keyword(&sym.source) =>
+        {
+            Expression::Literal(Value::Str(Arc::clone(&sym.source)))
+        }
+        Expression::FuncCall(call) => {
+            let mut new_call = (**call).clone();
+            new_call.args = call.args.iter().map(normalize_variable_type).collect();
+            Expression::FuncCall(Box::new(new_call))
+        }
+        Expression::Object(entries) => Expression::Object(
+            entries
+                .iter()
+                .map(|(k, v)| (k.clone(), normalize_variable_type(v)))
+                .collect(),
+        ),
+        Expression::Array(items) => {
+            Expression::Array(items.iter().map(normalize_variable_type).collect())
+        }
+        other => other.clone(),
+    }
+}
+
+fn is_terraform_type_keyword(s: &str) -> bool {
+    matches!(
+        s,
+        "string" | "number" | "bool" | "any" | "null" | "list" | "map" | "set" | "tuple" | "object"
     )
 }
 
@@ -646,6 +693,117 @@ variable "db_password" {
         assert!(v.sensitive);
         assert!(v.default.is_some());
         assert!(v.type_expr.is_some());
+    }
+
+    /// `variable { type = string }` (and number/bool/any/null) is a
+    /// Terraform type constraint, not an identifier reference — but HCL
+    /// has no way to tell them apart at lower time, so the bare keyword
+    /// arrives here as `Expression::Unresolved(SymbolKind::Other, ...)`.
+    /// We normalize the recognized keywords to literal strings so the
+    /// exported `attributes_json` carries `"string"` instead of an
+    /// `{"__kind__":"Other","__unresolved__":"string"}` marker.
+    #[test]
+    fn test_should_normalize_bare_type_keyword_to_literal_string() {
+        let src = r#"
+variable "name" { type = string }
+variable "age"  { type = number }
+variable "ok"   { type = bool }
+variable "any_" { type = any }
+"#;
+        let raw = raw_from_source(src);
+        let mut diags = Vec::new();
+        let comp = project_component(&raw, ComponentId::from_index(0), &mut diags);
+        let by_name = |n: &str| -> Expression {
+            comp.variables
+                .iter()
+                .find(|v| v.name.as_ref() == n)
+                .and_then(|v| v.type_expr.clone())
+                .unwrap_or_else(|| panic!("variable {n} missing"))
+        };
+        for (var, expected) in [
+            ("name", "string"),
+            ("age", "number"),
+            ("ok", "bool"),
+            ("any_", "any"),
+        ] {
+            match by_name(var) {
+                Expression::Literal(crate::ir::Value::Str(s)) => assert_eq!(s.as_ref(), expected),
+                other => panic!("variable {var}: expected literal `{expected}`, got {other:?}"),
+            }
+        }
+    }
+
+    /// `variable { type = list(string) }` and friends lower as a function
+    /// call with the inner type keyword as an `Unresolved(Other, "string")`
+    /// argument. The normalizer recurses into `FuncCall::args` so the
+    /// inner keyword becomes a literal `"string"` too.
+    #[test]
+    fn test_should_normalize_constructor_type_keyword_args() {
+        let src = r#"
+variable "regions" { type = list(string) }
+variable "tags"    { type = map(string) }
+variable "shape"   { type = object({ enabled = bool, count = number }) }
+"#;
+        let raw = raw_from_source(src);
+        let mut diags = Vec::new();
+        let comp = project_component(&raw, ComponentId::from_index(0), &mut diags);
+
+        let regions = comp
+            .variables
+            .iter()
+            .find(|v| v.name.as_ref() == "regions")
+            .and_then(|v| v.type_expr.clone())
+            .expect("regions type_expr");
+        match regions {
+            Expression::FuncCall(call) => {
+                assert_eq!(call.name.as_ref(), "list");
+                assert!(
+                    matches!(
+                        &call.args[..],
+                        [Expression::Literal(crate::ir::Value::Str(s))] if s.as_ref() == "string"
+                    ),
+                    "args={:?}",
+                    call.args
+                );
+            }
+            other => panic!("regions: expected list(...) FuncCall, got {other:?}"),
+        }
+
+        let shape = comp
+            .variables
+            .iter()
+            .find(|v| v.name.as_ref() == "shape")
+            .and_then(|v| v.type_expr.clone())
+            .expect("shape type_expr");
+        let shape_call = match shape {
+            Expression::FuncCall(call) => call,
+            other => panic!("shape: expected object(...) FuncCall, got {other:?}"),
+        };
+        assert_eq!(shape_call.name.as_ref(), "object");
+        // First arg is the object literal `{ enabled = bool, count = number }`.
+        let entries = match &shape_call.args[..] {
+            [Expression::Object(entries)] => entries,
+            other => panic!("shape: expected object literal arg, got {other:?}"),
+        };
+        let entry = |key: &str| -> Expression {
+            entries
+                .iter()
+                .find(|(k, _)| {
+                    matches!(k, Expression::Literal(crate::ir::Value::Str(s)) if s.as_ref() == key)
+                })
+                .map_or_else(
+                    || panic!("entry {key} missing"),
+                    |(_, v)| v.clone(),
+                )
+        };
+        match entry("enabled") {
+            Expression::Literal(crate::ir::Value::Str(s)) => assert_eq!(s.as_ref(), "bool"),
+            other => panic!("enabled: expected literal `bool`, got {other:?}"),
+        }
+        match entry("count") {
+            Expression::Literal(crate::ir::Value::Str(s)) => assert_eq!(s.as_ref(), "number"),
+            other => panic!("count: expected literal `number`, got {other:?}"),
+        }
     }
 
     #[test]

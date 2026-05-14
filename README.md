@@ -7,8 +7,13 @@ Arrow-compatible engine.
 Built end-to-end in Rust 2024 — `#![forbid(unsafe_code)]`, no `unwrap`/`panic`
 reachable from external input, every input boundary validated.
 
-- 📦 [`tfparser-core`](./crates/core) — the library
-- 🛠️ [`tfparser-cli`](./crates/cli) — the `tfparser` binary
+- 📦 [`tfparser-core`](./crates/core) — the library (`crates/`)
+- 🛠️ [`tfparser-cli`](./apps/cli) — the `tfparser` binary (`apps/`)
+
+📖 Guides — also in 中文:
+- [User guide](./docs/user-guide.en.md) · [用户指南](./docs/user-guide.zh.md)
+- [Developer guide](./docs/dev-guide.en.md) · [开发者指南](./docs/dev-guide.zh.md)
+- [Docs index](./docs/index.md)
 
 ## Why
 
@@ -32,7 +37,7 @@ Plus `workspace.manifest.json` with SHA-256 hashes for reproducibility.
 ## Install
 
 ```sh
-cargo install --path crates/cli --locked
+cargo install --path apps/cli --locked
 # or, after publish:
 cargo install tfparser-cli
 ```
@@ -57,6 +62,43 @@ duckdb -c "
 # verify a previous run hasn't been tampered with
 tfparser verify --dir ./out
 ```
+
+## Library use
+
+The CLI is a thin wrapper around `tfparser-core`. For programmatic use,
+reach for the [`Parser`](./crates/core/src/parser.rs) façade — one-shot or
+builder, your call:
+
+```rust,no_run
+// one-liner
+let workspace = tfparser_core::parse("./my-tf-repo")?;
+println!("{} components", workspace.components.len());
+
+// builder + parquet export in one call
+use std::{path::Path, sync::Arc};
+use tfparser_core::{Parser, EnvVarMode, ExportOptions};
+
+let parser = Parser::builder()
+    .workspace_root("./my-tf-repo")
+    .environment("production")
+    .default_region("us-west-2")?
+    .env_var_mode(EnvVarMode::Passthrough)
+    .allow_env("TF_VAR_environment")
+    .var("region", "us-east-1")
+    .strict_providers(true)
+    .build()?;
+
+let export = ExportOptions::builder()
+    .out_dir(Arc::<Path>::from(Path::new("./out")))
+    .overwrite(true)
+    .build();
+let (workspace, report) = parser.parse_and_export(&export)?;
+# Ok::<_, tfparser_core::Error>(())
+```
+
+See the runnable examples under
+[`crates/core/examples`](./crates/core/examples) and the full developer
+guide at [`docs/dev-guide.en.md`](./docs/dev-guide.en.md).
 
 ### Common flags
 

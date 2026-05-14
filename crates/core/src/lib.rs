@@ -1,32 +1,81 @@
 //! # tfparser-core
 //!
 //! Parse a Terraform / Terragrunt source repository into a typed in-memory IR
-//! that can be exported as Parquet. This crate exposes the **types and traits**
-//! the pipeline is built around. Implementations land progressively:
+//! that can be exported as Parquet — without running `terraform plan`.
 //!
-//! | Phase | Module(s) gated | Status |
-//! | ----- | --------------- | ------ |
-//! | 1 | [`ir`], [`diagnostic`], [`error`] | ✅ landed |
-//! | 2 | [`discovery`], [`loader`] | ✅ landed |
-//! | 3 | [`exporter`], [`projection`] | ✅ landed |
-//! | 4 | [`eval`] | ✅ landed |
-//! | 5 | [`graph`] | ✅ landed |
-//! | 6 | [`terragrunt`] | ✅ landed |
-//! | 7 | [`provider`] | ✅ landed |
-//! | 8 | [`graph`] edges + secondary tables in [`exporter`] | ✅ landed |
-//! | 9 | [`pipeline::DefaultPipeline`], hardening | ✅ landed |
+//! ## Quick start
 //!
-//! See `./specs/91-impl-plan.md` for the build-order rationale and
-//! `./specs/10-data-model.md` for the IR contract pinned in this crate.
+//! One-shot parse with all defaults:
+//!
+//! ```no_run
+//! # fn main() -> tfparser_core::Result<()> {
+//! let workspace = tfparser_core::parse("./my-tf-repo")?;
+//! println!(
+//!     "{} components / {} modules / {} resources",
+//!     workspace.components.len(),
+//!     workspace.modules.len(),
+//!     workspace.components.iter().map(|c| c.resources.len()).sum::<usize>(),
+//! );
+//! # Ok(()) }
+//! ```
+//!
+//! Builder for full control + Parquet export in one call:
+//!
+//! ```no_run
+//! # fn main() -> tfparser_core::Result<()> {
+//! use std::sync::Arc;
+//! use std::path::Path;
+//! use tfparser_core::{Parser, EnvVarMode, ExportOptions};
+//!
+//! let parser = Parser::builder()
+//!     .workspace_root("./my-tf-repo")
+//!     .environment("production")
+//!     .default_region("us-west-2")?
+//!     .env_var_mode(EnvVarMode::Passthrough)
+//!     .allow_env("TF_VAR_environment")
+//!     .var("region", "us-east-1")
+//!     .strict_providers(true)
+//!     .build()?;
+//!
+//! let export_opts = ExportOptions::builder()
+//!     .out_dir(Arc::<Path>::from(Path::new("./out")))
+//!     .overwrite(true)
+//!     .build();
+//! let (workspace, report) = parser.parse_and_export(&export_opts)?;
+//! eprintln!("wrote {} rows in {} ms", report.total_rows, report.elapsed.as_millis());
+//! # let _ = workspace;
+//! # Ok(()) }
+//! ```
+//!
+//! Bring everything in scope with the prelude:
+//!
+//! ```
+//! use tfparser_core::prelude::*;
+//! ```
+//!
+//! ## Surface map
+//!
+//! | I want to … | Reach for |
+//! | ----------- | --------- |
+//! | parse a repo with defaults | [`parse`] |
+//! | parse + tune env / vars / limits | [`Parser::builder`] |
+//! | parse and write Parquet in one call | [`Parser::parse_and_export`] |
+//! | inspect the parsed IR | [`ir::Workspace`], [`ir::Component`], [`ir::Resource`] |
+//! | swap in a stub for tests | implement [`Pipeline`] / [`Exporter`] |
+//! | configure parquet output (compression, manifest, tables) | [`ExportOptions::builder`] + [`ParquetExporter`] |
+//! | load an AWS profile map | [`load_aws_config`] / [`load_yaml_profile_map`] |
 //!
 //! ## Engineering invariants
 //!
 //! - `#![forbid(unsafe_code)]` at the crate root — no `unsafe`, ever.
-//! - No `unwrap`/`expect`/`panic` reachable from external input; per CLAUDE.md § Safety & Security
-//!   the workspace lints deny those clippy categories for every member.
+//! - No `unwrap` / `expect` / `panic` reachable from external input; the workspace lints deny those
+//!   clippy categories for every member.
 //! - Every public type is `#[non_exhaustive]` so future fields are additive.
 //! - Public `Debug` impls redact sensitive fields (provider secrets, resolved values that may carry
 //!   credentials).
+//!
+//! See `./specs/91-impl-plan.md` for the build-order rationale and
+//! `./specs/10-data-model.md` for the IR contract pinned in this crate.
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
@@ -39,7 +88,9 @@ pub mod exporter;
 pub mod graph;
 pub mod ir;
 pub mod loader;
+pub mod parser;
 pub mod pipeline;
+pub mod prelude;
 pub mod projection;
 pub mod provider;
 pub mod terragrunt;
@@ -51,6 +102,10 @@ pub use eval::{
     EnvVarMode, EvalContext, EvalError, EvalLimits, EvaluatedComponent, Evaluator, FuncRegistry,
     HclEvaluator,
 };
+pub use exporter::{
+    CompressionOpt, ExportOptions, ExportReport, ExportedFile, Exporter, ParquetExporter,
+    SecondaryTable,
+};
 pub use graph::{
     DefaultGraphBuilder, ExternalModuleRef, GraphBuilder, GraphContext, GraphError, ModuleRegistry,
 };
@@ -61,6 +116,7 @@ pub use ir::{
     ProviderBlock, ProviderRef, Region, Resource, ResourceKind, SourceFile, Span, StateBackend,
     SymbolKind, Symbolic, TerragruntConfig, UnaryOp, Value, Variable, Workspace,
 };
+pub use parser::{Parser, ParserBuilder, parse};
 pub use pipeline::{DefaultPipeline, Pipeline, PipelineOptions};
 pub use provider::{
     DefaultProviderResolver, ProfileEntry, ProfileMap, ProviderContext, ProviderError,
@@ -90,6 +146,8 @@ mod thread_safety {
         assert_send_sync::<Error>();
         assert_send_sync::<ValidationError>();
         assert_send_sync::<PipelineOptions>();
+        assert_send_sync::<Parser>();
+        assert_send_sync::<ParserBuilder>();
         // Trait objects of `Pipeline` are the cross-thread shape downstream
         // crates (server, future CLI) will hold.
         assert_send_sync::<Box<dyn Pipeline>>();

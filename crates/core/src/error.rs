@@ -55,6 +55,10 @@ pub enum Error {
     /// Provider resolver (Phase 7) raised a fatal error.
     #[error(transparent)]
     Provider(#[from] crate::provider::ProviderError),
+
+    /// Parquet exporter (Phase 3+) raised a fatal error.
+    #[error(transparent)]
+    Export(#[from] crate::exporter::ExportError),
 }
 
 /// Reasons a validated newtype constructor (e.g. [`crate::Address::new`])
@@ -70,6 +74,11 @@ pub enum ValidationError {
         /// Name of the field being validated.
         field: &'static str,
     },
+
+    /// A required builder field was not set before [`crate::Parser::builder`]
+    /// finalisation. The string is the field name (e.g. `"workspace_root"`).
+    #[error("required field `{0}` not set")]
+    MissingField(&'static str),
 
     /// The candidate exceeds the per-field byte cap.
     #[error("`{field}` exceeds maximum byte length ({observed} > {limit})")]

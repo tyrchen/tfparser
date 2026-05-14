@@ -1,5 +1,9 @@
 //! Top-level pipeline trait + default implementation.
 //!
+//! **Most consumers want [`crate::Parser`] instead** — it wraps
+//! [`DefaultPipeline`] + [`crate::exporter::ParquetExporter`] behind one
+//! builder. The trait here is the seam that lets tests swap a stub in.
+//!
 //! [`Pipeline::run`] is the single entry point downstream crates (the CLI,
 //! the future server) call. Phase 1 defined the trait skeleton; Phase 9
 //! lands the [`DefaultPipeline`] implementation wiring discovery → loader

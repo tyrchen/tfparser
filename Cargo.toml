@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/*"]
+members = ["crates/*", "apps/*"]
 exclude = ["crates/core/fuzz"]
 resolver = "3"
 
@@ -83,9 +83,9 @@ dashmap = "6"
 #   (account-id `^\d{12}$`, region length cap, char allowlists; per
 #   [16-provider-resolver.md § 3.2] and CLAUDE.md § Input Validation).
 # - `serde_yaml` deserialises the YAML profile-map file.
-arc-swap   = "1.7"
-rust-ini   = "0.21"
-validator  = { version = "0.20", features = ["derive"] }
+arc-swap = "1.9"
+rust-ini = "0.21"
+validator = { version = "0.20", features = ["derive"] }
 serde_yaml = "0.9"
 
 # Phase 3 CLI surface.
@@ -98,12 +98,12 @@ smallvec = { version = "1.15", features = ["serde", "const_generics"] }
 typed-builder = "0.23"
 
 # Test helpers
-tempfile   = "3"
+tempfile = "3"
 assert_cmd = "2"
 predicates = "3"
 
 # Bench harness — pinned to the latest 0.7 family, drop-in successor to 0.5.
-criterion = { version = "0.7", default-features = false, features = [
+criterion = { version = "0.8", default-features = false, features = [
   "html_reports",
   "rayon",
 ] }

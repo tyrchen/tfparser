@@ -16,24 +16,18 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
-use std::{collections::BTreeSet, io::Write as _, path::PathBuf, process::ExitCode, sync::Arc};
+use std::{io::Write as _, path::PathBuf, process::ExitCode, sync::Arc};
 
 use anyhow::{Context, Result};
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::{Parser as ClapParser, Subcommand, ValueEnum};
 use tfparser_core::{
-    DefaultPipeline, Pipeline, PipelineOptions,
-    eval::EnvVarMode,
-    exporter::{
-        CompressionOpt, ExportOptions, Exporter, ParquetExporter, SecondaryTable,
-        schema_field_names,
-    },
-    ir::{Map, Value},
-    load_aws_config, load_yaml_profile_map,
+    CompressionOpt, EnvVarMode, ExportOptions, Parser as TfParser, SecondaryTable,
+    exporter::schema_field_names,
 };
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 
-#[derive(Debug, Parser)]
+#[derive(Debug, ClapParser)]
 #[command(
     name = "tfparser",
     version,
@@ -64,7 +58,7 @@ enum Command {
     Verify(VerifyArgs),
 }
 
-#[derive(Debug, Parser)]
+#[derive(Debug, ClapParser)]
 struct ParseArgs {
     /// Workspace root directory.
     root: PathBuf,
@@ -132,7 +126,7 @@ struct ParseArgs {
     tables: TablesArg,
 }
 
-#[derive(Debug, Parser)]
+#[derive(Debug, ClapParser)]
 struct VerifyArgs {
     /// Path to a `workspace.manifest.json`. Defaults to
     /// `<DIR>/workspace.manifest.json` when `--dir` is supplied.
@@ -203,109 +197,26 @@ fn run(cli: &Cli) -> Result<()> {
     }
 }
 
-#[allow(clippy::too_many_lines)] // CLI plumbing — each line is a flag/argument mapping.
 fn run_parse(args: &ParseArgs) -> Result<()> {
     let root = canonicalize_root(&args.root)?;
     ensure_out_dir(&args.out)?;
 
-    // ---- Build PipelineOptions ----------------------------------------
-    let env_mode = match args.env_mode {
-        EnvMode::Strict => EnvVarMode::Strict {
-            allowed: parse_env_allowlist(&args.allow_env),
-        },
-        EnvMode::Passthrough => EnvVarMode::Passthrough,
-        EnvMode::Mock => EnvVarMode::Mock,
-    };
+    // ---- Build the parser via the façade ------------------------------
+    let parser = build_parser(args, &root)?;
 
-    let repo_vars: Map = args
-        .vars
-        .iter()
-        .map(|kv| parse_kv(kv))
-        .collect::<Result<Vec<_>>>()?
-        .into_iter()
-        .map(|(k, v)| (Arc::<str>::from(k), Value::Str(Arc::<str>::from(v))))
-        .collect();
+    // ---- Build ExportOptions -----------------------------------------
+    let export_opts = build_export_options(args)?;
 
-    let allowed_env: BTreeSet<Arc<str>> = args
-        .allow_env
-        .iter()
-        .map(|s| Arc::<str>::from(s.as_str()))
-        .collect();
-
-    let opts = PipelineOptions::builder()
-        .root(Arc::<std::path::Path>::from(root.as_path()))
-        .environment(
-            args.environment
-                .as_ref()
-                .map(|s| Arc::<str>::from(s.as_str())),
-        )
-        .env_var_mode(env_mode)
-        .allowed_env(allowed_env)
-        .repo_vars(repo_vars)
-        .build();
-
-    // ---- Build DefaultPipeline ----------------------------------------
-    let mut pipeline = DefaultPipeline::new();
-    if let Some(path) = &args.profile_map {
-        let map = load_yaml_profile_map(path)
-            .with_context(|| format!("load profile map at {}", path.display()))?;
-        pipeline = pipeline.with_profile_map(map);
-    } else if let Some(path) = &args.aws_config {
-        let map = load_aws_config(path)
-            .with_context(|| format!("load aws-config at {}", path.display()))?;
-        pipeline = pipeline.with_profile_map(map);
-    }
-    if let Some(region) = &args.region {
-        let r = tfparser_core::Region::new(region.clone())
-            .with_context(|| format!("invalid --region: {region}"))?;
-        pipeline = pipeline.with_default_region(r);
-    }
-    if args.strict_providers {
-        pipeline = pipeline.strict();
-    }
-
-    // ---- Run pipeline -------------------------------------------------
-    let ws = pipeline.run(&opts).context("pipeline")?;
+    // ---- Parse + export in one call ----------------------------------
+    let (ws, report) = parser
+        .parse_and_export(&export_opts)
+        .context("parse + export")?;
     info!(
         components = ws.components.len(),
         modules = ws.modules.len(),
         diagnostics = ws.diagnostics.len(),
         "pipeline complete"
     );
-
-    // ---- Export -------------------------------------------------------
-    let parsed_at_ms = match args.parsed_at.as_deref() {
-        Some(s) => Some(parse_rfc3339_ms(s)?),
-        None => None,
-    };
-    let command_line = redact_command_line(std::env::args());
-    let compression = match (args.compression, args.zstd_level) {
-        (CompressionKind::Uncompressed, _) => CompressionOpt::Uncompressed,
-        (CompressionKind::Snappy, _) => CompressionOpt::Snappy,
-        (CompressionKind::Zstd, level) => {
-            CompressionOpt::zstd(level).with_context(|| format!("invalid zstd level: {level}"))?
-        }
-    };
-    let tables = match args.tables {
-        TablesArg::All => vec![
-            SecondaryTable::Dependencies,
-            SecondaryTable::Components,
-            SecondaryTable::Modules,
-        ],
-        TablesArg::None => Vec::new(),
-    };
-    let export_opts = ExportOptions::builder()
-        .out_dir(Arc::<std::path::Path>::from(args.out.as_path()))
-        .overwrite(args.overwrite)
-        .compression(compression)
-        .parsed_at_ms(parsed_at_ms)
-        .command_line(command_line)
-        .tables(tables)
-        .build();
-    let report = ParquetExporter::new()
-        .export(&ws, &export_opts)
-        .context("export")?;
-
     info!(
         rows = report.total_rows,
         bytes = report.bytes_written,
@@ -330,8 +241,82 @@ fn run_parse(args: &ParseArgs) -> Result<()> {
     Ok(())
 }
 
-fn parse_env_allowlist(items: &[String]) -> BTreeSet<Arc<str>> {
-    items.iter().map(|s| Arc::<str>::from(s.as_str())).collect()
+/// Translate CLI [`ParseArgs`] into a configured [`TfParser`] via the
+/// `tfparser_core::Parser` façade. All flag→option mapping lives here.
+fn build_parser(args: &ParseArgs, root: &std::path::Path) -> Result<TfParser> {
+    let env_mode = match args.env_mode {
+        EnvMode::Strict => EnvVarMode::Strict {
+            allowed: args
+                .allow_env
+                .iter()
+                .map(|s| Arc::<str>::from(s.as_str()))
+                .collect(),
+        },
+        EnvMode::Passthrough => EnvVarMode::Passthrough,
+        EnvMode::Mock => EnvVarMode::Mock,
+    };
+
+    let mut b = TfParser::builder()
+        .workspace_root(root)
+        .env_var_mode(env_mode)
+        .allow_env_many(args.allow_env.iter().map(String::as_str))
+        .strict_providers(args.strict_providers);
+
+    if let Some(env) = args.environment.as_deref() {
+        b = b.environment(env);
+    }
+    if let Some(region) = args.region.as_deref() {
+        b = b
+            .default_region(region)
+            .with_context(|| format!("invalid --region: {region}"))?;
+    }
+    if let Some(path) = &args.profile_map {
+        b = b
+            .load_profile_map_yaml(path)
+            .with_context(|| format!("load profile map at {}", path.display()))?;
+    } else if let Some(path) = &args.aws_config {
+        b = b
+            .load_aws_config(path)
+            .with_context(|| format!("load aws-config at {}", path.display()))?;
+    }
+    for kv in &args.vars {
+        let (k, v) = parse_kv(kv)?;
+        b = b.var(k, v);
+    }
+
+    Ok(b.build()?)
+}
+
+/// Translate CLI [`ParseArgs`] into [`ExportOptions`].
+fn build_export_options(args: &ParseArgs) -> Result<ExportOptions> {
+    let parsed_at_ms = match args.parsed_at.as_deref() {
+        Some(s) => Some(parse_rfc3339_ms(s)?),
+        None => None,
+    };
+    let command_line = redact_command_line(std::env::args());
+    let compression = match (args.compression, args.zstd_level) {
+        (CompressionKind::Uncompressed, _) => CompressionOpt::Uncompressed,
+        (CompressionKind::Snappy, _) => CompressionOpt::Snappy,
+        (CompressionKind::Zstd, level) => {
+            CompressionOpt::zstd(level).with_context(|| format!("invalid zstd level: {level}"))?
+        }
+    };
+    let tables = match args.tables {
+        TablesArg::All => vec![
+            SecondaryTable::Dependencies,
+            SecondaryTable::Components,
+            SecondaryTable::Modules,
+        ],
+        TablesArg::None => Vec::new(),
+    };
+    Ok(ExportOptions::builder()
+        .out_dir(Arc::<std::path::Path>::from(args.out.as_path()))
+        .overwrite(args.overwrite)
+        .compression(compression)
+        .parsed_at_ms(parsed_at_ms)
+        .command_line(command_line)
+        .tables(tables)
+        .build())
 }
 
 fn parse_kv(s: &str) -> Result<(String, String)> {
@@ -575,6 +560,20 @@ fn map_exit_code(err: &anyhow::Error) -> u8 {
         terragrunt::TerragruntError,
     };
 
+    // CoreError wraps the phase-specific errors as variants, so check the
+    // façade's `Error` enum first — the bare `downcast_ref::<ExportError>`
+    // etc. below catch the (rarer) case where a phase-specific type is
+    // returned without being wrapped.
+    if let Some(core) = err.downcast_ref::<CoreError>() {
+        return match core {
+            CoreError::Validation(_) => 2,
+            CoreError::Io { .. } => 3,
+            CoreError::Limit { .. } => 4,
+            CoreError::Provider(_) => 6,
+            CoreError::Export(_) => 7,
+            _ => 1,
+        };
+    }
     if err.downcast_ref::<ExportError>().is_some() {
         return 7;
     }
@@ -589,14 +588,6 @@ fn map_exit_code(err: &anyhow::Error) -> u8 {
     // reserved there for `--fail-on-diagnostics` and must not collide.
     if err.downcast_ref::<GraphError>().is_some() {
         return 4;
-    }
-    if let Some(core) = err.downcast_ref::<CoreError>() {
-        return match core {
-            CoreError::Validation(_) => 2,
-            CoreError::Io { .. } => 3,
-            CoreError::Limit { .. } => 4,
-            _ => 1,
-        };
     }
     1
 }
