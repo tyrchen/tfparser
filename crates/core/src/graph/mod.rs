@@ -24,11 +24,13 @@
 //! [15-resource-graph.md]: ../../../specs/15-resource-graph.md
 
 mod builder;
+mod edges;
 mod error;
 mod expand;
 mod registry;
 
 pub use builder::{DefaultGraphBuilder, GraphBuilder, GraphContext};
+pub use edges::collect_edges_in_place;
 pub use error::GraphError;
 pub use registry::{ExternalModuleRef, ModuleRegistry};
 

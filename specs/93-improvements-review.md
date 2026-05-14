@@ -293,6 +293,89 @@ future phase.
 
 ---
 
+## Phase 7 review — independent code review (2026-05-14)
+
+### Fixed in-phase
+
+| ID | Severity | Where | Fix |
+| -- | -------- | ----- | --- |
+| F-024 | P1 | `crates/core/src/provider/resolver.rs::first_resolved_account` (reverse-lookup branches) | `HashMap`-iteration order produced non-deterministic `account_name` when multiple profiles shared an account-id. Added `lookup_name_by_account` that sorts by profile name and returns the lexicographically-smallest match. Restores **I-PROV-1** determinism. |
+| F-025 | P1 | `crates/core/src/provider/profile_map.rs::resolve_aws_profile` (chain-hop cap) | `for _hop in 0..=8` allowed a non-cyclic 9-hop chain to silently exit without erroring. Rewrote as an explicit `loop { … }` with a `hops` counter that errors `ProviderError::ChainTooLong` the moment `hops >= AWS_CONFIG_MAX_CHAIN_HOPS` *and* the next `source_profile` pointer is present. Symmetric with the cycle-detection branch. |
+| F-026 | P1 | `crates/core/src/provider/profile_map.rs::load_aws_config` | `String::from_utf8_lossy` silently swapped `U+FFFD` for invalid bytes — violates CLAUDE.md "reject, don't sanitize". Switched to `std::str::from_utf8` with an `Io { InvalidData }` error on failure. |
+
+### Invalid finding (closed)
+
+- Reviewer's *F2 [P1] "profile-miss doesn't fall through to cascade"*: re-reading
+  `first_resolved_account` shows the profile branch *does* fall through —
+  `unresolved.insert(profile)` runs and the function continues to the cascade
+  block. The early return only fires on a successful lookup. Closing.
+- Reviewer's *F11 [P0] "HashMap iteration order in load_aws_config"*: the
+  resulting entries are keyed by profile name and the per-profile result is
+  derived from the profile name itself, not its `HashMap` slot. Determinism
+  holds. Closing.
+
+### Deferred to a future phase
+
+| ID | Severity | Where | Fix shape |
+| -- | -------- | ----- | --------- |
+| P-077 | P2 | `crates/core/src/provider/profile_map.rs::read_capped` | TOCTOU between `metadata().len()` and `File::open` + `read_to_end`. Stream-read with `Read::take(CAP + 1)` and recheck. |
+| P-078 | P2 | `crates/core/src/provider/profile_map.rs::YamlBody` keys | Profile names (`HashMap` keys) have no length / charset cap; only the 256 KiB file cap bounds them. Add a per-key validator regex (e.g. `^[A-Za-z0-9._\-]{1,128}$`). |
+| P-079 | P2 | `crates/core/src/provider/profile_map.rs::YamlEntry::role_arn` | Length-capped at 2048 but never charset-validated. Add a `^arn:aws:iam::\d{12}:role/[\w+=,.@\-/]+$` regex. |
+| P-080 | P2 | `crates/core/src/provider/resolver.rs::resolve_component` (state-backend precedence) | `component.state_backend` and `terragrunt.state_backend` can both be `Some`; exporter only reads `component.state_backend`. Prefer `terragrunt.state_backend` when the former is `None`. |
+| P-081 | P2 | spec 16 § 4 line 89 (`workspace.environments` lookup) | Resolver does not consult `workspace.environments` for region (or account) cascade. Either implement or update spec — see S-027 below. |
+| P-082 | P2 | `crates/core/src/provider/resolver.rs::pick_provider` | Hard-coded `local_name == "aws"` preference for the default-provider lookup. Drop or comment as deliberate when multi-cloud lands. |
+| P-083 | P2 | `crates/core/src/provider/resolver.rs::fill_state_backend` | Malformed `profile` / `role_arn` / `region` values are silently dropped. Surface a `Diagnostic` per malformed value. |
+| P-084 | P2 | `crates/core/src/provider/resolver.rs::DefaultProviderResolver::resolve` | `RoleArnMalformed` diagnostic from spec § 6 is not emitted (no call site). Add it on `extract_account_id` miss when the source ARN was non-empty — see S-028. |
+| P-085 | P3 | `crates/core/tests/provider_pipeline.rs` | The synthetic profile map has 3 entries; impl-plan § 10 says "5-profile fixture". Either add 2 entries (chained `source_profile`, mixed `sso_account_id`+`role_arn`) or relax the spec wording. |
+| P-086 | P3 | `crates/core/tests/provider_pipeline.rs` (aws_config coverage) | No integration test drives the resolver via `load_aws_config`. Add one using a synthesised `~/.aws/config`-shaped file. |
+| P-087 | P3 | `crates/core/tests/provider_pipeline.rs` (determinism on shared account-id) | Existing determinism test doesn't probe the reverse-lookup path (no two profiles share an account-id). Add a regression for F-024. |
+
+### Spec defects — surfaced to the user
+
+| ID | Severity | Where | Issue / fix |
+| -- | -------- | ----- | ----------- |
+| S-027 | P2 | `specs/16-provider-resolver.md § 4` line 89 | Lists `workspace.environments.find(component.env).map(|e| e.aws_region)` as a chain step but `Component` has no `env` field, and the impl never consults `workspace.environments`. Either remove the step or define how a `Component` is paired with an `Environment`. |
+| S-028 | P2 | `specs/16-provider-resolver.md § 6` | `RoleArnMalformed { role_arn }` listed as a diagnostic but no code path in spec § 4 surfaces it. Implementation doesn't emit it either. Pin the call-site or strike from spec. |
+| S-029 | P3 | `specs/16-provider-resolver.md § 2` | `ProviderContext.default_region: Option<Arc<str>>`. Implementation uses the stricter `Option<Region>` newtype. Update spec to match (analogous to S-024 cross-ref). |
+| S-030 | P3 | `specs/16-provider-resolver.md § 4.1` | Example returns `Option<Arc<str>>` from `extract_account_id`; implementation returns `Option<AccountId>` (stronger). Update spec. |
+| S-031 | P3 | `specs/16-provider-resolver.md § 6` | Diagnostic names (`MissingProfileMapping`, `ProviderAliasNotFound`) are not mapped to the stable codes the implementation emits (`TF1601`, `TF1602`). Add a code↔name table. |
+| S-032 | P3 | `specs/16-provider-resolver.md § 9` | "read via `tilde` expansion + canonicalisation" — implementation accepts any `Path` verbatim and delegates expansion to the caller. Update spec to clarify caller-responsibility (CLI work; Phase 9). |
+
+---
+
+## Phase 8 review — independent code review (2026-05-14)
+
+### Fixed in-phase
+
+| ID | Severity | Where | Fix |
+| -- | -------- | ----- | --- |
+| F-027 | P0 | `crates/core/src/graph/edges.rs::component_address` | Triple-fallback path ended in `Address::new("component.x").unwrap()` — a reachable `unwrap` in non-test code, banned by CLAUDE.md. Rewrote `component_address` to return `Option<Address>`; `collect_terragrunt_edges` skips the component cleanly when the address rejects. |
+| F-028 | P2 | `crates/core/src/exporter/secondary.rs` (dead-code shim) | Removed `_edge_kind_used` `#[allow(dead_code)]` shim and dropped the unused `EdgeKind` import — CLAUDE.md says delete dead code, not suppress it. |
+
+### Deferred to a future phase
+
+| ID | Severity | Where | Fix shape |
+| -- | -------- | ----- | --------- |
+| P-088 | P2 | `crates/core/src/exporter/secondary.rs::write_components_parquet` (`environments_seen`) | Unconditionally surfaces every `ws.environments` entry on every row. Spec 15 § 5 wants per-component env coverage. Either emit empty list until the cascade-narrowing pass lands (Phase 9) or filter by Terragrunt discovery. |
+| P-089 | P2 | `crates/core/src/exporter/secondary.rs::components_schema` | Schema is missing `first_seen_at` / `last_seen_at` columns spec 15 § 5 lists. Add columns or update the spec (S-033). |
+| P-090 | P2 | `crates/core/tests/dependency_graph_pipeline.rs` | No writer-level coverage for `EdgeKind::TerragruntDependency` and `EdgeKind::ModuleInput`. Unit tests in `edges.rs` cover collection only. Add oracle workspaces. |
+| P-091 | P2 | `crates/core/tests/dependency_graph_pipeline.rs` (DuckDB) | Phase 8.8 says "DuckDB 3-table join integration test". Impl ships an in-Rust simulation. Defer to Phase 9 hardening with a real `duckdb` crate integration. |
+| P-092 | P3 | `crates/core/src/ir/edge.rs::Edge` | Derived `PartialOrd, Ord` use enum-discriminant order; writer sorts by `kind.as_str()` (alphabetical). Today no caller uses the derived `Ord`, but the discrepancy is a footgun. Drop the derive or implement to mirror the string order. |
+| P-093 | P3 | `crates/core/src/graph/edges.rs` (dedup key) | `BTreeSet<(String, String, EdgeKind)>` allocates two `String`s per edge. Swap for `(Arc<str>, Arc<str>, EdgeKind)` using `Address::as_str()` clones. |
+| P-094 | P3 | `crates/core/src/exporter/secondary.rs::sorted_edges` | Re-sorts edges with the identical comparator the collector already used. Drop the second sort. |
+| P-095 | P3 | `crates/core/src/exporter/secondary.rs::write_modules_parquet` counts loop | Idiomatic `*counts.entry(k).or_insert(0) += 1` instead of the current double `source_key` call + `entry` + `.get` + `.unwrap_or(0)` pattern. Cosmetic perf. |
+| P-096 | P3 | `crates/cli/src/main.rs::run_verify` | Duplicates SHA-256 hex encoding from `exporter::manifest::sha256_hex_of_file`. Lift the helper to the public exporter module and reuse. |
+| P-097 | P3 | `crates/cli/src/main.rs::run_verify` | Manifest read uses `std::fs::read` with no size cap. Defence-in-depth: cap at e.g. 4 MiB with `take`. |
+
+### Spec defects — surfaced to the user
+
+| ID | Severity | Where | Issue / fix |
+| -- | -------- | ----- | ----------- |
+| S-033 | P2 | `specs/15-resource-graph.md § 5` (Component summary) | Lists `first_seen_at` / `last_seen_at` columns with no source — a single parse run has no "previous" state to compare against. Either remove or define the derivation. |
+| S-034 | P2 | `specs/50-cli.md § 2` | Enumerates `parse`, `inspect`, `schema`, `version` but not `verify`. Phase 8.7 added `tfparser verify`. Add a `§ 2.5` documenting `--manifest`, `--dir`, exit code, output shape. |
+| S-035 | P2 | `specs/15-resource-graph.md § 4` (`TerragruntDependency` edges) | Spec mentions `dependency.x.outputs.y` as the trigger; implementation reads `Component.terragrunt.dependencies` block list, never the symbolic-ref form. Clarify which surface is canonical. |
+| S-036 | P3 | `specs/10-data-model.md § 5.3` (`modules.parquet` columns) | Spec gives prose ("source form, resolution status, call count") but not column names/types. Pin the impl's columns: `module_id, source_raw, source_kind, canonical_path, call_count, resolved`. |
+
 ## How to use this file
 
 When a future phase starts, scan the table above for entries whose `file:line`

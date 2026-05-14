@@ -85,6 +85,14 @@ pub struct ExportOptions {
     /// `"tfparser parse foo --out bar"`). Optional.
     #[builder(default = Arc::from(""))]
     pub command_line: Arc<str>,
+
+    /// Which secondary Parquet tables to emit alongside
+    /// `resources.parquet`. Phase 8 (M5) introduces
+    /// `dependencies.parquet`, `components.parquet`, and
+    /// `modules.parquet`. Defaults to **none** so existing callers see
+    /// the original M0 output shape; CLI binds `--tables` to expand.
+    #[builder(default)]
+    pub tables: Vec<SecondaryTable>,
 }
 
 /// Supported parquet compression codecs. Phase 3 ships the spec's
@@ -100,6 +108,32 @@ pub enum CompressionOpt {
     Zstd(i32),
     /// Snappy.
     Snappy,
+}
+
+/// Which Parquet table to emit alongside `resources.parquet`. Phase 8
+/// landed `dependencies` / `components` / `modules` per spec 91 § 11.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+#[non_exhaustive]
+pub enum SecondaryTable {
+    /// Inter-resource and component-to-component dependency edges.
+    Dependencies,
+    /// Per-component summary rows.
+    Components,
+    /// Per-module rows.
+    Modules,
+}
+
+impl SecondaryTable {
+    /// Lowercase file name (without extension).
+    #[must_use]
+    pub const fn file_stem(self) -> &'static str {
+        match self {
+            Self::Dependencies => "dependencies",
+            Self::Components => "components",
+            Self::Modules => "modules",
+        }
+    }
 }
 
 impl CompressionOpt {
@@ -167,6 +201,7 @@ impl ParquetExporter {
 
 impl Exporter for ParquetExporter {
     #[instrument(level = "info", skip_all, fields(out = %opts.out_dir.display()))]
+    #[allow(clippy::too_many_lines)] // Phase 8 layered secondary-table writes on top of the M0 resources path; splitting is churn.
     fn export(&self, ws: &Workspace, opts: &ExportOptions) -> Result<ExportReport, ExportError> {
         let started = std::time::Instant::now();
 
@@ -175,8 +210,22 @@ impl Exporter for ParquetExporter {
         let final_path: Arc<Path> = Arc::from(opts.out_dir.join("resources.parquet"));
         let manifest_path: Arc<Path> = Arc::from(opts.out_dir.join("workspace.manifest.json"));
 
+        // Pre-stage every output path so we can fail before any partial
+        // file lands. Spec 20 § 4 — overwrite is one decision per run.
+        let mut secondary_paths: Vec<(SecondaryTable, Arc<Path>)> =
+            Vec::with_capacity(opts.tables.len());
+        for table in &opts.tables {
+            let path: Arc<Path> =
+                Arc::from(opts.out_dir.join(format!("{}.parquet", table.file_stem())));
+            secondary_paths.push((*table, path));
+        }
         if !opts.overwrite {
             for p in [&final_path, &manifest_path] {
+                if p.exists() {
+                    return Err(ExportError::OutputExists(Arc::clone(p)));
+                }
+            }
+            for (_, p) in &secondary_paths {
                 if p.exists() {
                     return Err(ExportError::OutputExists(Arc::clone(p)));
                 }
@@ -195,8 +244,42 @@ impl Exporter for ParquetExporter {
             write_resources_parquet(ws, opts, &final_path, projected_rows, parsed_at_ms)?
         };
 
+        // Write each requested secondary table; collect manifest entries.
+        let mut secondary_outputs: Vec<(SecondaryTable, Arc<Path>, u64, u64, String)> =
+            Vec::with_capacity(secondary_paths.len());
+        for (table, path) in &secondary_paths {
+            let (table_rows, table_bytes) = match table {
+                SecondaryTable::Dependencies => {
+                    super::secondary::write_dependencies_parquet(ws, path, opts.compression)?
+                }
+                SecondaryTable::Components => {
+                    super::secondary::write_components_parquet(ws, path, opts.compression)?
+                }
+                SecondaryTable::Modules => {
+                    super::secondary::write_modules_parquet(ws, path, opts.compression)?
+                }
+            };
+            let sha = sha256_hex_of_file(path)?;
+            secondary_outputs.push((*table, Arc::clone(path), table_rows, table_bytes, sha));
+        }
+
         // Hash + manifest.
         let resources_sha = sha256_hex_of_file(&final_path)?;
+        let mut manifest_files: Vec<ManifestFile> = Vec::with_capacity(1 + secondary_outputs.len());
+        manifest_files.push(ManifestFile {
+            name: "resources.parquet".to_string(),
+            rows,
+            bytes,
+            sha256: resources_sha.clone(),
+        });
+        for (table, _, r, b, sha) in &secondary_outputs {
+            manifest_files.push(ManifestFile {
+                name: format!("{}.parquet", table.file_stem()),
+                rows: *r,
+                bytes: *b,
+                sha256: sha.clone(),
+            });
+        }
         let manifest = Manifest {
             tfparser_version: PARSER_VERSION.to_string(),
             schema_major: SCHEMA_MAJOR,
@@ -204,35 +287,48 @@ impl Exporter for ParquetExporter {
             generated_at_ms: parsed_at_ms,
             workspace_root: ws.root.display().to_string(),
             command_line: opts.command_line.to_string(),
-            files: vec![ManifestFile {
-                name: "resources.parquet".to_string(),
-                rows,
-                bytes,
-                sha256: resources_sha.clone(),
-            }],
+            files: manifest_files,
         };
         let manifest_bytes_written = write_manifest(&manifest, &manifest_path, opts.overwrite)?;
         let manifest_sha = sha256_hex_of_file(&manifest_path)?;
 
-        let files = vec![
-            ExportedFile {
-                path: Arc::clone(&final_path),
-                rows,
-                bytes,
-                sha256: resources_sha,
-            },
-            ExportedFile {
-                path: Arc::clone(&manifest_path),
-                rows: 0,
-                bytes: manifest_bytes_written,
-                sha256: manifest_sha,
-            },
-        ];
+        let mut files: Vec<ExportedFile> = Vec::with_capacity(2 + secondary_outputs.len());
+        files.push(ExportedFile {
+            path: Arc::clone(&final_path),
+            rows,
+            bytes,
+            sha256: resources_sha,
+        });
+        for (_, path, table_rows, table_bytes, sha) in secondary_outputs.iter().cloned() {
+            files.push(ExportedFile {
+                path,
+                rows: table_rows,
+                bytes: table_bytes,
+                sha256: sha,
+            });
+        }
+        files.push(ExportedFile {
+            path: Arc::clone(&manifest_path),
+            rows: 0,
+            bytes: manifest_bytes_written,
+            sha256: manifest_sha,
+        });
 
+        let total_rows = rows
+            + secondary_outputs
+                .iter()
+                .map(|(_, _, r, _, _)| *r)
+                .sum::<u64>();
+        let bytes_written = bytes
+            + secondary_outputs
+                .iter()
+                .map(|(_, _, _, b, _)| *b)
+                .sum::<u64>()
+            + manifest_bytes_written;
         Ok(ExportReport {
             files,
-            total_rows: rows,
-            bytes_written: bytes + manifest_bytes_written,
+            total_rows,
+            bytes_written,
             elapsed: started.elapsed(),
         })
     }
@@ -711,6 +807,21 @@ fn resource_row(r: &Resource, state_account_id: &str, state_region: &str) -> Emi
         .as_ref()
         .map(provider_ref_string)
         .unwrap_or_default();
+    let account_id = r
+        .account_id
+        .as_ref()
+        .map(|a| a.as_str().to_string())
+        .unwrap_or_default();
+    let account_name = r
+        .account_name
+        .as_deref()
+        .map(str::to_string)
+        .unwrap_or_default();
+    let region = r
+        .region
+        .as_ref()
+        .map(|reg| reg.as_str().to_string())
+        .unwrap_or_default();
     EmittedRow {
         module_path: r.address.module_path(),
         address: r.address.as_str().to_string(),
@@ -722,9 +833,9 @@ fn resource_row(r: &Resource, state_account_id: &str, state_region: &str) -> Emi
         resource_name: r.name.to_string(),
         provider_local,
         provider_source: String::new(),
-        account_id: String::new(),
-        account_name: String::new(),
-        region: String::new(),
+        account_id,
+        account_name,
+        region,
         environment: String::new(),
         count_expr: r
             .count_expr

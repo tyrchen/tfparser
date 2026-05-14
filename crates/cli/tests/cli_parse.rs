@@ -160,3 +160,56 @@ fn test_should_write_resources_parquet_with_expected_row_count() {
     // single-component: 1 provider + 2 variables + 1 local + 1 resource + 1 output = 6.
     assert_eq!(rows, 6);
 }
+
+#[test]
+fn test_verify_subcommand_passes_on_unchanged_artifacts() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    Command::cargo_bin("tfparser")
+        .unwrap()
+        .args([
+            "parse",
+            fixture("single-component").to_str().unwrap(),
+            "--out",
+            tmp.path().to_str().unwrap(),
+            "--parsed-at",
+            "2026-05-13T16:00:00Z",
+        ])
+        .assert()
+        .success();
+
+    Command::cargo_bin("tfparser")
+        .unwrap()
+        .args(["verify", "--dir", tmp.path().to_str().unwrap()])
+        .assert()
+        .success();
+}
+
+#[test]
+fn test_verify_subcommand_fails_when_artifact_is_tampered() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    Command::cargo_bin("tfparser")
+        .unwrap()
+        .args([
+            "parse",
+            fixture("single-component").to_str().unwrap(),
+            "--out",
+            tmp.path().to_str().unwrap(),
+            "--parsed-at",
+            "2026-05-13T16:00:00Z",
+        ])
+        .assert()
+        .success();
+    // Corrupt the parquet to ensure verify exits non-zero.
+    let path = tmp.path().join("resources.parquet");
+    let mut bytes = std::fs::read(&path).unwrap();
+    if let Some(last) = bytes.last_mut() {
+        *last = last.wrapping_add(1);
+    }
+    std::fs::write(&path, bytes).unwrap();
+
+    Command::cargo_bin("tfparser")
+        .unwrap()
+        .args(["verify", "--dir", tmp.path().to_str().unwrap()])
+        .assert()
+        .failure();
+}

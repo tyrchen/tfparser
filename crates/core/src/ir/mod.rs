@@ -7,6 +7,7 @@
 //! [10-data-model.md]: ../../specs/10-data-model.md
 
 mod component;
+mod edge;
 mod environment;
 mod expression;
 mod files;
@@ -22,6 +23,7 @@ mod value;
 mod workspace;
 
 pub use component::{Component, ComponentBuilder, ComponentKind, Local, Output, Variable};
+pub use edge::{Edge, EdgeBuilder, EdgeKind};
 pub use environment::{Environment, EnvironmentBuilder};
 pub use expression::{
     AttributeMap, BinaryOp, Conditional, Expression, ForExpr, FuncCall, SymbolKind, Symbolic,

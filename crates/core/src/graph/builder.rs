@@ -184,12 +184,20 @@ impl GraphBuilder for DefaultGraphBuilder {
         // shape).
         let modules = build_workspace_modules(&components);
 
-        Ok(Workspace::builder()
+        let mut ws = Workspace::builder()
             .root(Arc::clone(&ctx.workspace_root))
             .components(out_components)
             .modules(modules)
             .diagnostics(diagnostics)
-            .build())
+            .build();
+
+        // Phase 8: dependency-edge inference. Off when the orchestrator
+        // wants only the row table (`infer_dependencies = false`).
+        if ctx.infer_dependencies {
+            super::edges::collect_edges_in_place(&mut ws);
+        }
+
+        Ok(ws)
     }
 }
 

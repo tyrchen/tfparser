@@ -51,6 +51,10 @@ pub enum Error {
         /// Configured limit.
         limit: u64,
     },
+
+    /// Provider resolver (Phase 7) raised a fatal error.
+    #[error(transparent)]
+    Provider(#[from] crate::provider::ProviderError),
 }
 
 /// Reasons a validated newtype constructor (e.g. [`crate::Address::new`])

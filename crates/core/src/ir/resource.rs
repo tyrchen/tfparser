@@ -6,7 +6,7 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 use typed_builder::TypedBuilder;
 
-use crate::ir::{Address, AttributeMap, Expression, ProviderRef, Span};
+use crate::ir::{AccountId, Address, AttributeMap, Expression, ProviderRef, Region, Span};
 
 /// Whether an IR node was declared as `resource` or `data`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -102,6 +102,25 @@ pub struct Resource {
     /// [`Expression::Literal`] once the loader has lowered them.
     #[builder(default)]
     pub attributes: AttributeMap,
+
+    /// Resolved AWS account id (12 digits). Filled by the provider resolver
+    /// (Phase 7) per [16-provider-resolver.md § 4]. `None` until resolution
+    /// runs or when no profile mapping could be inferred (the column then
+    /// emits `""` per spec 10 § 3).
+    ///
+    /// [16-provider-resolver.md § 4]: ../../specs/16-provider-resolver.md
+    #[builder(default)]
+    pub account_id: Option<AccountId>,
+
+    /// Human-friendly account name, from the profile-map entry the resolver
+    /// matched. `None` when unresolved or absent.
+    #[builder(default)]
+    pub account_name: Option<Arc<str>>,
+
+    /// Resolved AWS region. Filled by the provider resolver (Phase 7) per
+    /// [16-provider-resolver.md § 4]. `None` until resolution runs.
+    #[builder(default)]
+    pub region: Option<Region>,
 
     /// Source position of the opening `resource`/`data` keyword.
     pub span: Span,

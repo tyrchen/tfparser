@@ -55,6 +55,11 @@ enum Command {
 
     /// Print build/version info.
     Version,
+
+    /// Re-hash every file in a `workspace.manifest.json` and verify it
+    /// matches the manifest's stored SHA-256. Spec 50 § 2; spec 91 § 11
+    /// (Phase 8.7).
+    Verify(VerifyArgs),
 }
 
 #[derive(Debug, Parser)]
@@ -73,6 +78,18 @@ struct ParseArgs {
     /// Pin `parsed_at` to this RFC3339 timestamp (for reproducible builds).
     #[arg(long)]
     parsed_at: Option<String>,
+}
+
+#[derive(Debug, Parser)]
+struct VerifyArgs {
+    /// Path to a `workspace.manifest.json`. Defaults to
+    /// `<DIR>/workspace.manifest.json` when `--dir` is supplied.
+    #[arg(long, conflicts_with = "dir")]
+    manifest: Option<PathBuf>,
+
+    /// Directory containing a `workspace.manifest.json` to verify.
+    #[arg(long)]
+    dir: Option<PathBuf>,
 }
 
 fn main() -> ExitCode {
@@ -101,6 +118,7 @@ fn run(cli: &Cli) -> Result<()> {
             )?;
             Ok(())
         }
+        Command::Verify(args) => run_verify(args),
     }
 }
 
@@ -176,6 +194,81 @@ fn run_parse(args: &ParseArgs) -> Result<()> {
         writeln!(stdout, "{} diagnostic(s)", ws.diagnostics.len())?;
     }
     Ok(())
+}
+
+fn run_verify(args: &VerifyArgs) -> Result<()> {
+    use std::fmt::Write as _;
+
+    use sha2::{Digest, Sha256};
+    use tfparser_core::exporter::Manifest;
+
+    let manifest_path = match (&args.manifest, &args.dir) {
+        (Some(p), _) => p.clone(),
+        (None, Some(dir)) => dir.join("workspace.manifest.json"),
+        (None, None) => {
+            anyhow::bail!("either --manifest <PATH> or --dir <DIR> is required");
+        }
+    };
+    let manifest_dir = manifest_path
+        .parent()
+        .map_or_else(|| PathBuf::from("."), std::path::Path::to_path_buf);
+
+    let bytes = std::fs::read(&manifest_path)
+        .with_context(|| format!("read manifest at {}", manifest_path.display()))?;
+    let manifest: Manifest = serde_json::from_slice(&bytes)
+        .with_context(|| format!("parse manifest at {}", manifest_path.display()))?;
+
+    let mut stdout = std::io::stdout().lock();
+    writeln!(
+        stdout,
+        "verifying {} ({} file(s))",
+        manifest_path.display(),
+        manifest.files.len()
+    )?;
+
+    let mut mismatches: Vec<String> = Vec::new();
+    for f in &manifest.files {
+        let path = manifest_dir.join(&f.name);
+        let read = std::fs::read(&path);
+        match read {
+            Ok(bytes) => {
+                let mut h = Sha256::new();
+                h.update(&bytes);
+                let digest = h.finalize();
+                let mut got = String::with_capacity(64);
+                for b in digest {
+                    let _ = write!(got, "{b:02x}");
+                }
+                let observed = bytes.len() as u64;
+                let ok = got == f.sha256 && observed == f.bytes;
+                if ok {
+                    writeln!(stdout, "  ✓ {} ({} bytes)", f.name, observed)?;
+                } else {
+                    let reason = if got == f.sha256 {
+                        format!("byte-size mismatch (expected {}, got {observed})", f.bytes)
+                    } else {
+                        format!("sha mismatch (expected {}, got {got})", f.sha256)
+                    };
+                    writeln!(stdout, "  ✗ {} — {reason}", f.name)?;
+                    mismatches.push(format!("{}: {reason}", f.name));
+                }
+            }
+            Err(err) => {
+                writeln!(stdout, "  ✗ {} — not found: {err}", f.name)?;
+                mismatches.push(format!("{}: i/o: {err}", f.name));
+            }
+        }
+    }
+
+    if mismatches.is_empty() {
+        writeln!(stdout, "ok — manifest verified")?;
+        Ok(())
+    } else {
+        anyhow::bail!(
+            "manifest verification failed: {} error(s)",
+            mismatches.len()
+        );
+    }
 }
 
 fn run_schema() -> Result<()> {

@@ -74,6 +74,20 @@ base64 = "0.22"
 # (CLAUDE.md § Async & Concurrency — DashMap over Mutex<HashMap>).
 dashmap = "6"
 
+# Phase 7 provider resolver:
+# - `arc-swap` is the CLAUDE.md-anchored choice for an infrequently-updated
+#   `Arc<ProfileMap>` (lock-free reads on the hot resolver path).
+# - `rust-ini` parses `~/.aws/config` (INI-shaped; reliable maintained crate
+#   per [16-provider-resolver.md § 3.1]).
+# - `validator` derive-validates the YAML profile-map loader's input
+#   (account-id `^\d{12}$`, region length cap, char allowlists; per
+#   [16-provider-resolver.md § 3.2] and CLAUDE.md § Input Validation).
+# - `serde_yaml` deserialises the YAML profile-map file.
+arc-swap   = "1.7"
+rust-ini   = "0.21"
+validator  = { version = "0.20", features = ["derive"] }
+serde_yaml = "0.9"
+
 # Phase 3 CLI surface.
 clap = { version = "4", features = ["derive", "env"] }
 

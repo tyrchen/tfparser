@@ -32,6 +32,10 @@ base64        = { workspace = true }
 dashmap       = { workspace = true }
 ryu           = { workspace = true }
 jiff          = { workspace = true }
+arc-swap      = { workspace = true }
+rust-ini      = { workspace = true }
+validator     = { workspace = true }
+serde_yaml    = { workspace = true }
 
 [dev-dependencies]
 anyhow             = { workspace = true }

@@ -39,6 +39,7 @@ pub mod ir;
 pub mod loader;
 pub mod pipeline;
 pub mod projection;
+pub mod provider;
 pub mod terragrunt;
 pub(crate) mod util;
 
@@ -53,12 +54,17 @@ pub use graph::{
 };
 pub use ir::{
     AccountId, Address, AssumeRole, AttributeMap, BinaryOp, BlockKind, Component, ComponentId,
-    ComponentKind, DependencyBlock, Environment, Expression, FileExt, GenerateBlock, IncludePath,
-    Local, Map, Module, ModuleCall, ModuleId, ModuleSource, Output, ProviderBlock, ProviderRef,
-    Region, Resource, ResourceKind, SourceFile, Span, StateBackend, SymbolKind, Symbolic,
-    TerragruntConfig, UnaryOp, Value, Variable, Workspace,
+    ComponentKind, DependencyBlock, Edge, EdgeKind, Environment, Expression, FileExt,
+    GenerateBlock, IncludePath, Local, Map, Module, ModuleCall, ModuleId, ModuleSource, Output,
+    ProviderBlock, ProviderRef, Region, Resource, ResourceKind, SourceFile, Span, StateBackend,
+    SymbolKind, Symbolic, TerragruntConfig, UnaryOp, Value, Variable, Workspace,
 };
 pub use pipeline::{Pipeline, PipelineOptions};
+pub use provider::{
+    DefaultProviderResolver, ProfileEntry, ProfileMap, ProviderContext, ProviderError,
+    ProviderResolver, SharedProfileMap, empty_profile_map, extract_account_id, load_aws_config,
+    load_yaml_profile_map,
+};
 pub use terragrunt::{FsTerragruntResolver, TerragruntError, TerragruntResolver, TgContext};
 
 #[cfg(test)]

@@ -7,7 +7,7 @@ use typed_builder::TypedBuilder;
 
 use crate::{
     diagnostic::Diagnostic,
-    ir::{Component, Environment, Module},
+    ir::{Component, Edge, Environment, Module},
 };
 
 /// The fully-parsed workspace, ready for export.
@@ -48,6 +48,14 @@ pub struct Workspace {
     /// `TerragruntConfig.diagnostics` instead.
     #[builder(default)]
     pub diagnostics: Vec<Diagnostic>,
+
+    /// Dependency edges populated by the graph phase (Phase 8 / M5). The
+    /// list is sorted by `(from, to, kind)` for deterministic Parquet
+    /// output (see [15-resource-graph.md § 4]).
+    ///
+    /// [15-resource-graph.md § 4]: ../../specs/15-resource-graph.md
+    #[builder(default)]
+    pub edges: Vec<Edge>,
 }
 
 #[cfg(test)]

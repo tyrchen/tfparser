@@ -23,6 +23,7 @@
 pub mod json;
 mod manifest;
 mod schema;
+mod secondary;
 mod writer;
 
 use std::sync::Arc;
@@ -31,8 +32,13 @@ pub use manifest::{Manifest, ManifestFile, write_manifest};
 pub use schema::{
     PARSER_VERSION, SCHEMA_MAJOR, SCHEMA_MINOR, resources_schema, schema_field_names,
 };
+pub use secondary::{
+    components_field_names, components_schema, dependencies_field_names, dependencies_schema,
+    modules_field_names, modules_schema,
+};
 pub use writer::{
     CompressionOpt, ExportOptions, ExportReport, ExportedFile, Exporter, ParquetExporter,
+    SecondaryTable,
 };
 
 /// Errors the exporter can raise.
