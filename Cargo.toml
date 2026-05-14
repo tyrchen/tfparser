@@ -1,23 +1,84 @@
 [workspace]
-members = ["crates/*", "apps/*"]
+members = ["crates/*"]
 resolver = "3"
 
 [workspace.package]
 version = "0.1.0"
-authors = ["Your Name <YourName@yourdomain.com>"]
+authors = ["tfparser contributors"]
 edition = "2024"
 license = "MIT"
-documentation = "https://docs.rs/"
-repository = "https://github.com/TODO"
-homepage = "https://github.com/TODO"
+documentation = "https://docs.rs/tfparser-core"
+repository = "https://github.com/tchen/tfparser"
+homepage = "https://github.com/tchen/tfparser"
 readme = "README.md"
+rust-version = "1.95"
 
 [workspace.dependencies]
-anyhow = "1.0.102"
-serde = { version = "1.0.228", features = ["derive"] }
-serde_json = "1.0.142"
-thiserror = "2.0.18"
-tokio = { version = "1.52", features = ["rt", "rt-multi-thread", "macros"] }
+# Errors / utilities
+anyhow = "1"
+thiserror = "2"
 
-# workspace crates
+# Serialization
+serde = { version = "1", features = ["derive", "rc"] }
+serde_json = "1"
+
+# Observability
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+
+# Async runtime (kept for downstream crates; tfparser-core itself is sync)
+tokio = { version = "1.52", features = [
+  "rt",
+  "rt-multi-thread",
+  "macros",
+  "fs",
+] }
+
+# HCL parsing (Phase 0 spikes + Phase 2+)
+hcl-edit = "0.9"
+hcl-rs = "0.19"
+
+# Columnar I/O (Phase 0 spikes + Phase 3+) — latest as of 2026-05.
+arrow = { version = "58", default-features = false, features = ["prettyprint"] }
+parquet = { version = "58", default-features = false, features = [
+  "arrow",
+  "zstd",
+  "snap",
+] }
+
+# Small-value containers
+smallvec = { version = "1.15", features = ["serde", "const_generics"] }
+
+# Builder derive — CLAUDE.md § Type Design requires it for structs with >5 fields.
+typed-builder = "0.23"
+
+# Test helpers
+tempfile = "3"
+
+# Workspace member alias
 tfparser-core = { path = "crates/core" }
+
+# Workspace-wide lint policy (CLAUDE.md § Safety & Security + § Code Style).
+# Crate Cargo.toml inherits via [lints] workspace = true.
+[workspace.lints.rust]
+unsafe_code                   = "forbid"
+rust_2024_compatibility       = { level = "warn", priority = -1 }
+missing_docs                  = "warn"
+missing_debug_implementations = "warn"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+unwrap_used = "deny"
+expect_used = "deny"
+indexing_slicing = "deny"
+panic = "deny"
+todo = "deny"
+unimplemented = "deny"
+dbg_macro = "deny"
+print_stdout = "deny"
+print_stderr = "deny"
+# Allow with justification — see CLAUDE.md commentary in 61-crates-and-features.md § 4.2.
+module_name_repetitions = "allow"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"

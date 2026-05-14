@@ -1,21 +1,51 @@
 [package]
-name = "tfparser-core"
-description = """
+name        = "tfparser-core"
+description = "Library for parsing Terraform / Terragrunt source repositories into a queryable IR (Parquet-backed)."
+categories  = ["development-tools", "parser-implementations"]
+keywords    = ["terraform", "terragrunt", "hcl", "parquet", "infrastructure"]
 
-"""
-categories = ["development-tools"]
-keywords = []
-version.workspace = true
-authors.workspace = true
-edition.workspace = true
-license.workspace = true
+version.workspace       = true
+authors.workspace       = true
+edition.workspace       = true
+license.workspace       = true
 documentation.workspace = true
-repository.workspace = true
-homepage.workspace = true
+repository.workspace    = true
+homepage.workspace      = true
+rust-version.workspace  = true
 
 [dependencies]
-anyhow.workspace = true
-serde.workspace = true
-serde_json.workspace = true
-thiserror.workspace = true
-tokio.workspace = true
+serde         = { workspace = true }
+serde_json    = { workspace = true }
+thiserror     = { workspace = true }
+tracing       = { workspace = true }
+smallvec      = { workspace = true }
+typed-builder = { workspace = true }
+
+[dev-dependencies]
+anyhow             = { workspace = true }
+arrow              = { workspace = true }
+parquet            = { workspace = true }
+hcl-edit           = { workspace = true }
+hcl-rs             = { workspace = true }
+tempfile           = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+[lints]
+workspace = true
+
+# Phase 0 risk-retirement spikes.
+# Each spike is a runnable proof that a Phase 2+ crate choice works against
+# real fixtures. They live under `examples/` so they exercise the same build
+# graph as the library and run via `cargo run --example <name>`.
+
+[[example]]
+name = "spike_hcl_lowering"
+path = "examples/spike_hcl_lowering.rs"
+
+[[example]]
+name = "spike_parquet_round_trip"
+path = "examples/spike_parquet_round_trip.rs"
+
+[[example]]
+name = "spike_eval_context"
+path = "examples/spike_eval_context.rs"
