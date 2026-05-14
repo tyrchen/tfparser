@@ -11,7 +11,7 @@
 //! | 3 | [`exporter`], [`projection`] | ✅ landed |
 //! | 4 | [`eval`] | ✅ this phase |
 //! | 5 | [`graph`] | ✅ this phase |
-//! | 6 | `terragrunt` | trait surface only |
+//! | 6 | [`terragrunt`] | ✅ this phase |
 //! | 7 | `provider` | not yet |
 //!
 //! See `./specs/91-impl-plan.md` for the build-order rationale and
@@ -39,6 +39,7 @@ pub mod ir;
 pub mod loader;
 pub mod pipeline;
 pub mod projection;
+pub mod terragrunt;
 pub(crate) mod util;
 
 pub use diagnostic::{Diagnostic, LimitKind, Severity};
@@ -58,6 +59,7 @@ pub use ir::{
     TerragruntConfig, UnaryOp, Value, Variable, Workspace,
 };
 pub use pipeline::{Pipeline, PipelineOptions};
+pub use terragrunt::{FsTerragruntResolver, TerragruntError, TerragruntResolver, TgContext};
 
 #[cfg(test)]
 mod thread_safety {

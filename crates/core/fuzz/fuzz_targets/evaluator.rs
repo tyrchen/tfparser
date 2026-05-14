@@ -14,13 +14,11 @@ use std::{path::Path, sync::Arc};
 
 use libfuzzer_sys::fuzz_target;
 use tfparser_core::{
-    eval::{EvalContext, FuncRegistry, HclEvaluator},
-    ir::ComponentId,
-    loader::{HclEditLoader, LoaderLimits},
-    projection::project_component,
     Evaluator,
-    ir::ComponentKind,
-    loader::RawComponent,
+    eval::{EvalContext, FuncRegistry, HclEvaluator},
+    ir::{ComponentId, ComponentKind},
+    loader::{HclEditLoader, LoaderLimits, RawComponent},
+    projection::project_component,
 };
 
 fuzz_target!(|data: &[u8]| {

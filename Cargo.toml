@@ -70,6 +70,10 @@ jiff = "0.2"
 # Expression::FuncCall (Unresolved) per spec 13 § 5 closing rule.
 base64 = "0.22"
 
+# Phase 6 Terragrunt resolver: concurrent memo for read_terragrunt_config
+# (CLAUDE.md § Async & Concurrency — DashMap over Mutex<HashMap>).
+dashmap = "6"
+
 # Phase 3 CLI surface.
 clap = { version = "4", features = ["derive", "env"] }
 

@@ -120,27 +120,22 @@ pub fn reduce_expression(expr: &Expression, scope: &Scope<'_>) -> Expression {
 
         Expression::Unresolved(sym) => match sym.kind {
             SymbolKind::Var => {
-                // `var.X[.<rest>]` — handle plain identifier only;
-                // attribute access on a struct binding stays unresolved
-                // because the binding shape may itself need reduction.
                 let rest = sym.source.strip_prefix("var.").unwrap_or(&sym.source);
                 let (name, tail) = split_head(rest);
-                if !tail.is_empty() {
-                    return expr.clone();
-                }
                 match scope.lookup_var(name) {
-                    Some(v) => Expression::Literal(v.clone()),
+                    Some(v) if tail.is_empty() => Expression::Literal(v.clone()),
+                    Some(v) => descend_attributes(v, tail)
+                        .map_or_else(|| expr.clone(), Expression::Literal),
                     None => expr.clone(),
                 }
             }
             SymbolKind::Local => {
                 let rest = sym.source.strip_prefix("local.").unwrap_or(&sym.source);
                 let (name, tail) = split_head(rest);
-                if !tail.is_empty() {
-                    return expr.clone();
-                }
                 match scope.lookup_local(name) {
-                    Some(v) => Expression::Literal(v.clone()),
+                    Some(v) if tail.is_empty() => Expression::Literal(v.clone()),
+                    Some(v) => descend_attributes(v, tail)
+                        .map_or_else(|| expr.clone(), Expression::Literal),
                     None => expr.clone(),
                 }
             }
@@ -342,6 +337,28 @@ pub fn reduce_expression(expr: &Expression, scope: &Scope<'_>) -> Expression {
 fn split_head(s: &str) -> (&str, &str) {
     s.find('.')
         .map_or((s, ""), |idx| (&s[..idx], &s[idx + 1..]))
+}
+
+/// Walk `.foo.bar.baz` attribute access on a [`Value::Map`]-backed binding.
+///
+/// Returns `Some(value)` if every step lands on a concrete entry, else
+/// `None` — the caller then keeps the source expression unresolved. Only
+/// [`Value::Map`] supports attribute access; everything else short-circuits
+/// to `None` (Terraform errors at apply time on `local.<int>.foo` —
+/// emitting `Unresolved` is a strictly safer outcome).
+fn descend_attributes(root: &Value, tail: &str) -> Option<Value> {
+    let mut current: &Value = root;
+    let mut rest: &str = tail;
+    while !rest.is_empty() {
+        let (head, next_rest) = split_head(rest);
+        let Value::Map(entries) = current else {
+            return None;
+        };
+        let (_, next_value) = entries.iter().find(|(k, _)| k.as_ref() == head)?;
+        current = next_value;
+        rest = next_rest;
+    }
+    Some(current.clone())
 }
 
 fn eval_binary(op: BinaryOp, lhs: &Value, rhs: &Value) -> Option<Value> {

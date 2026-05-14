@@ -103,6 +103,10 @@ allow = [
   "BSL-1.0",
   "OpenSSL",
   "Zlib",
+  # NCSA (University of Illinois/NCSA Open Source License) — permissive,
+  # MIT-equivalent; added in Phase 6 for `dashmap`'s license expression
+  # `(MIT OR Apache-2.0) AND NCSA`.
+  "NCSA",
 ]
 # The confidence threshold for detecting a license from license text.
 # The higher the value, the more closely the license text must be to the

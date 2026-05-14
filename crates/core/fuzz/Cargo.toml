@@ -4,6 +4,7 @@ version = "0.0.0"
 publish = false
 edition = "2024"
 rust-version = "1.95"
+license = "MIT"
 
 [package.metadata]
 cargo-fuzz = true
@@ -11,6 +12,7 @@ cargo-fuzz = true
 [dependencies]
 libfuzzer-sys = "0.4"
 arbitrary     = { version = "1", features = ["derive"] }
+tempfile      = "3"
 tfparser-core = { path = ".." }
 
 [[bin]]
@@ -27,8 +29,12 @@ test = false
 doc  = false
 bench = false
 
-[lints]
-workspace = true
+[[bin]]
+name = "terragrunt"
+path = "fuzz_targets/terragrunt.rs"
+test = false
+doc  = false
+bench = false
 
 # cargo-fuzz expects fuzz/ to be its own workspace separate from the host
 # repo. Marking as a stand-alone workspace prevents the parent's lints

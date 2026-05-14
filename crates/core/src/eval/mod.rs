@@ -43,7 +43,7 @@ mod context;
 mod error;
 mod files;
 mod locals;
-mod reduce;
+pub(crate) mod reduce;
 mod registry;
 mod stdlib;
 mod tf_funcs;
