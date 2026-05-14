@@ -389,6 +389,51 @@ mod tests {
     }
 
     #[test]
+    fn test_should_render_unresolved_keys_in_alpha_byte_order() {
+        // `__kind__` < `__unresolved__` under ASCII byte order — both start
+        // with `__` so the next char decides. The byte string must be
+        // exactly this; future refactors that flip the order would silently
+        // break downstream consumers that rely on byte-determinism.
+        let map: AttributeMap = vec![(Arc::<str>::from("r"), s("var.x", SymbolKind::Var))];
+        let out = attribute_map_to_string(&map);
+        assert_eq!(out, r#"{"r":{"__kind__":"Var","__unresolved__":"var.x"}}"#);
+    }
+
+    #[test]
+    fn test_should_render_func_call_keys_in_alpha_byte_order() {
+        // `_` (0x5F) < `a` (0x61), so `__unresolved_func__` < `args`.
+        let map: AttributeMap = vec![(
+            Arc::<str>::from("p"),
+            Expression::FuncCall(Box::new(crate::ir::FuncCall {
+                name: Arc::from("base64encode"),
+                args: vec![],
+                span: Span::synthetic(),
+            })),
+        )];
+        let out = attribute_map_to_string(&map);
+        assert_eq!(
+            out,
+            r#"{"p":{"__unresolved_func__":"base64encode","args":[]}}"#
+        );
+    }
+
+    #[test]
+    fn test_should_render_binary_op_keys_in_alpha_byte_order() {
+        let map: AttributeMap = vec![(
+            Arc::<str>::from("flag"),
+            Expression::BinaryOp {
+                op: crate::ir::BinaryOp::Eq,
+                lhs: Box::new(Expression::Literal(crate::ir::Value::Int(1))),
+                rhs: Box::new(Expression::Literal(crate::ir::Value::Int(2))),
+                span: Span::synthetic(),
+            },
+        )];
+        let out = attribute_map_to_string(&map);
+        // `__binary_op__` < `lhs` < `rhs` byte-lexically.
+        assert_eq!(out, r#"{"flag":{"__binary_op__":"Eq","lhs":1,"rhs":2}}"#);
+    }
+
+    #[test]
     fn test_should_parse_back_through_serde_json() {
         let map: AttributeMap = vec![
             (

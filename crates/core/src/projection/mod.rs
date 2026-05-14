@@ -373,23 +373,27 @@ fn project_output(block: &RawBlock) -> Option<Output> {
 
 /// Parse `provider = aws` or `provider = aws.<alias>` into a [`ProviderRef`].
 ///
-/// Returns `None` when the right-hand side is anything other than a static
-/// identifier or `identifier.alias` traversal (e.g. a conditional, a
-/// function call, a `var.x` ref).
+/// Accepts only syntactic provider identifiers: a bare identifier (lowered
+/// as [`SymbolKind::Other`]) or a single-dot traversal that the lowerer
+/// classified as [`SymbolKind::Resource`] (the shape `<ident>.<ident>`
+/// matches the resource-ref heuristic in
+/// `crates/core/src/loader/lowering.rs::symbol_kind_for`). Rejects
+/// `var.x` / `local.x` / `path.module` / `terraform.workspace` /
+/// `dependency.x` / `each.value` because none of those name a provider.
 fn extract_provider_ref(expr: &Expression) -> Option<ProviderRef> {
     let Expression::Unresolved(s) = expr else {
         return None;
     };
-    if matches!(s.kind, SymbolKind::Var | SymbolKind::Local) {
+    if !matches!(s.kind, SymbolKind::Other | SymbolKind::Resource) {
         return None;
     }
     let source: &str = s.source.as_ref();
-    if source.is_empty() || source.contains(char::is_whitespace) {
+    if !is_provider_identifier(source) {
         return None;
     }
     let mut parts = source.splitn(2, '.');
-    let local_name: Arc<str> = Arc::from(parts.next().filter(|p| !p.is_empty())?);
-    let alias: Option<Arc<str>> = parts.next().filter(|p| !p.is_empty()).map(Arc::from);
+    let local_name: Arc<str> = Arc::from(parts.next()?);
+    let alias: Option<Arc<str>> = parts.next().map(Arc::from);
     Some(
         ProviderRef::builder()
             .local_name(local_name)
@@ -397,6 +401,31 @@ fn extract_provider_ref(expr: &Expression) -> Option<ProviderRef> {
             .span(s.span.clone())
             .build(),
     )
+}
+
+/// `^[a-z_][a-z0-9_]*(\.[a-z_][a-z0-9_]*)?$` — provider local name
+/// optionally followed by `.alias`. Identifier rules mirror HCL's
+/// (lowercase, digits, underscore; first char not a digit).
+fn is_provider_identifier(s: &str) -> bool {
+    fn is_segment(seg: &str) -> bool {
+        let mut bytes = seg.bytes();
+        match bytes.next() {
+            Some(b) if b.is_ascii_lowercase() || b == b'_' => {}
+            _ => return false,
+        }
+        bytes.all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
+    }
+    let mut parts = s.split('.');
+    let Some(first) = parts.next() else {
+        return false;
+    };
+    if !is_segment(first) {
+        return false;
+    }
+    match parts.next() {
+        None => true,
+        Some(second) => is_segment(second) && parts.next().is_none(),
+    }
 }
 
 /// Parse `depends_on = [<addr>, <addr>, ...]` into a list of [`Address`].
@@ -685,6 +714,54 @@ resource "aws_iam_role" "r" {
             .build();
         let expr = Expression::Unresolved(s);
         assert!(extract_provider_ref(&expr).is_none());
+    }
+
+    #[test]
+    fn test_should_reject_path_module_as_provider_ref() {
+        // path.module / terraform.workspace / each.value / dependency.foo
+        // all parse to non-Resource/Other SymbolKinds and must be rejected
+        // even if their syntactic shape happens to look like `id.id`.
+        for (kind, source) in [
+            (SymbolKind::Path, "path.module"),
+            (SymbolKind::Terraform, "terraform.workspace"),
+            (SymbolKind::Iteration, "each.value"),
+            (SymbolKind::TerragruntDependency, "dependency.vpc"),
+        ] {
+            let s = Symbolic::builder()
+                .kind(kind)
+                .source(Arc::<str>::from(source))
+                .span(Span::synthetic())
+                .build();
+            assert!(
+                extract_provider_ref(&Expression::Unresolved(s)).is_none(),
+                "expected None for {source:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_should_reject_too_many_dot_segments_as_provider_ref() {
+        // Three-part shape (`aws.main.something`) must not lift to
+        // ProviderRef; that's a resource attribute reference.
+        let s = Symbolic::builder()
+            .kind(SymbolKind::Resource)
+            .source(Arc::<str>::from("aws_iam_role.r.arn"))
+            .span(Span::synthetic())
+            .build();
+        assert!(extract_provider_ref(&Expression::Unresolved(s)).is_none());
+    }
+
+    #[test]
+    fn test_provider_identifier_charset() {
+        assert!(is_provider_identifier("aws"));
+        assert!(is_provider_identifier("aws.main"));
+        assert!(is_provider_identifier("_foo"));
+        assert!(!is_provider_identifier("Aws.main"));
+        assert!(!is_provider_identifier("aws main"));
+        assert!(!is_provider_identifier("aws."));
+        assert!(!is_provider_identifier(".aws"));
+        assert!(!is_provider_identifier("aws.main.extra"));
+        assert!(!is_provider_identifier("3aws"));
     }
 
     #[test]

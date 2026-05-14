@@ -268,6 +268,47 @@ fn test_should_export_multi_provider_with_aliases() {
 }
 
 #[test]
+fn test_should_surface_projection_diagnostics_in_workspace_diagnostics() {
+    // A `resource` block missing its second label triggers the TF1301
+    // diagnostic in the projection. The integration here is the
+    // load-bearing point: a refactor that drops the `out_diagnostics`
+    // push must break this test.
+    use tfparser_core::ir::ComponentKind;
+
+    let tmp = tempfile::tempdir().expect("tempdir");
+    std::fs::write(
+        tmp.path().join("main.tf"),
+        // First block: a well-formed resource so the directory passes the
+        // discovery classifier's "looks like a component" probe.
+        // Second block: only one label — the loader is tolerant, but the
+        // projection refuses it and emits TF1301.
+        b"resource \"good_type\" \"good_name\" {}\nresource \"only_one_label\" {}\n",
+    )
+    .unwrap();
+
+    let discovered = FsDiscoverer
+        .discover(tmp.path(), &DiscoveryOptions::defaults())
+        .expect("discovery");
+    let sources = SourceMap::new();
+    let limits = LoaderLimits::default();
+    let ctx = LoadContext::new(&discovered.root, &sources, &limits);
+
+    let mut diagnostics = Vec::new();
+    for (idx, dir) in discovered.components.iter().enumerate() {
+        let raw = HclEditLoader.load(dir, &ctx).expect("load");
+        diagnostics.extend(raw.diagnostics.iter().cloned());
+        // Drop the projected component; we just care that diagnostics
+        // surface.
+        let _ = project_component(&raw, ComponentId::from_index(idx), &mut diagnostics);
+        let _ = ComponentKind::Component;
+    }
+    assert!(
+        diagnostics.iter().any(|d| d.code.as_ref() == "TF1301"),
+        "expected TF1301 in {diagnostics:?}"
+    );
+}
+
+#[test]
 fn test_should_produce_byte_identical_parquet_for_pinned_parsed_at() {
     // Two exports of an identical Workspace+opts produce identical bytes.
     let tmp_a = tempfile::tempdir().expect("tempdir");

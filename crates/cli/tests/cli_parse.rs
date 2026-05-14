@@ -129,10 +129,8 @@ fn test_should_fail_with_exit_code_3_for_missing_root() {
             tmp.path().to_str().unwrap(),
         ])
         .assert()
-        .failure();
-    // Exact code depends on which layer surfaces the error first; we only
-    // assert non-zero. The CLI uses 3 for missing root via core IO, but
-    // canonicalize-not-found surfaces as anyhow generic — exit code 1.
+        .failure()
+        .code(3);
 }
 
 #[test]

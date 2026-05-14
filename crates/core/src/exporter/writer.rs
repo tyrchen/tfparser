@@ -434,6 +434,13 @@ fn approx_row_bytes(row: &Row<'_>) -> usize {
         + 8
 }
 
+/// Upper bound on pre-allocated rows. Bounds memory at ~`MAX_PREALLOC_ROWS`
+/// times per-row capacity hints (~500 B/row × 1M = ~500 MiB). Arrow grows
+/// beyond this organically; the clamp prevents pathological workspaces from
+/// allocating gigabytes up-front. Per CLAUDE.md § Safety & Security
+/// (bound every collection).
+const MAX_PREALLOC_ROWS: usize = 1_000_000;
+
 /// Cheap projected upper bound on `Vec` pre-allocation. Each component
 /// contributes (resources + providers + modules + outputs + variables +
 /// locals) rows.
@@ -448,7 +455,8 @@ fn projected_row_count(ws: &Workspace) -> usize {
                 + c.variables.len()
                 + c.locals.len()
         })
-        .sum()
+        .sum::<usize>()
+        .min(MAX_PREALLOC_ROWS)
 }
 
 fn write_resources_parquet(
@@ -507,7 +515,7 @@ fn write_resources_parquet(
     sorted_components.sort_by(|a, b| a.path.as_os_str().cmp(b.path.as_os_str()));
 
     for component in sorted_components {
-        let component_path_str = component.path.display().to_string();
+        let component_path_str = render_path(&component.path);
         emit_component_rows(
             component,
             &workspace_root_str,
@@ -932,8 +940,35 @@ fn provider_ref_string(r: &ProviderRef) -> String {
     }
 }
 
+/// Render a path as a relative, `/`-separated string suitable for the
+/// `component_path` and `file` columns (spec 10 § 3 columns #2, #20). The
+/// path must already be relative (loader/discovery guarantee this); we only
+/// normalise separators here so Windows hosts don't leak `\` into the
+/// downstream Parquet artefact.
+fn render_path(p: &Path) -> String {
+    let mut out = String::with_capacity(p.as_os_str().len());
+    for (idx, comp) in p.components().enumerate() {
+        if idx > 0 {
+            out.push('/');
+        }
+        match comp {
+            std::path::Component::Normal(s) => {
+                out.push_str(&s.to_string_lossy());
+            }
+            std::path::Component::ParentDir => out.push_str(".."),
+            std::path::Component::CurDir => out.push('.'),
+            std::path::Component::Prefix(_) | std::path::Component::RootDir => {
+                // Absolute prefixes are not expected at this layer; if one
+                // ever appears we keep its display form to preserve traceability.
+                out.push_str(&comp.as_os_str().to_string_lossy());
+            }
+        }
+    }
+    out
+}
+
 fn span_relative_file(span: &Span) -> String {
-    span.file.display().to_string()
+    render_path(&span.file)
 }
 
 /// Render an expression as its compact source form (verbatim for unresolved
@@ -1114,6 +1149,22 @@ mod tests {
     fn test_partial_path_appends_suffix() {
         let p = partial_path(Path::new("/tmp/resources.parquet"));
         assert_eq!(p, PathBuf::from("/tmp/resources.parquet.partial"));
+    }
+
+    #[test]
+    fn test_render_path_normalises_separators() {
+        use std::path::PathBuf;
+        // POSIX-shaped input round-trips verbatim.
+        assert_eq!(render_path(&PathBuf::from("a/b/c.tf")), "a/b/c.tf");
+        // Single-component path stays single.
+        assert_eq!(render_path(&PathBuf::from("main.tf")), "main.tf");
+        // Empty path stays empty.
+        assert_eq!(render_path(&PathBuf::from("")), "");
+        // Parent / current dir round-trip.
+        assert_eq!(
+            render_path(&PathBuf::from("../foo/main.tf")),
+            "../foo/main.tf"
+        );
     }
 
     #[test]

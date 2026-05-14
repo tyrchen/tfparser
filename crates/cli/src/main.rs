@@ -105,10 +105,7 @@ fn run(cli: &Cli) -> Result<()> {
 }
 
 fn run_parse(args: &ParseArgs) -> Result<()> {
-    let root = args
-        .root
-        .canonicalize()
-        .with_context(|| format!("workspace root not found: {}", args.root.display()))?;
+    let root = canonicalize_root(&args.root)?;
     ensure_out_dir(&args.out)?;
 
     let discovered = FsDiscoverer
@@ -191,6 +188,17 @@ fn run_schema() -> Result<()> {
     let mut stdout = std::io::stdout().lock();
     writeln!(stdout, "{}", serde_json::to_string_pretty(&body)?)?;
     Ok(())
+}
+
+fn canonicalize_root(root: &std::path::Path) -> Result<std::path::PathBuf> {
+    root.canonicalize().map_err(|source| {
+        // Surface as a core IO error so map_exit_code routes it to
+        // exit code 3 ("Discovery error / root missing") per spec 50 § 4.3.
+        anyhow::Error::from(tfparser_core::Error::Io {
+            path: root.to_path_buf(),
+            source,
+        })
+    })
 }
 
 fn ensure_out_dir(out: &std::path::Path) -> Result<()> {

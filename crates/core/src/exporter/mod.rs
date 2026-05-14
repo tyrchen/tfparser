@@ -85,6 +85,12 @@ pub enum ExportError {
     },
 
     /// JSON manifest serialisation raised.
-    #[error("manifest serialisation error: {0}")]
-    Manifest(#[from] serde_json::Error),
+    #[error("manifest serialisation error at {path}: {source}")]
+    Manifest {
+        /// Manifest path.
+        path: Arc<std::path::Path>,
+        /// Underlying serialisation error.
+        #[source]
+        source: serde_json::Error,
+    },
 }

@@ -24,6 +24,7 @@ use super::ExportError;
 /// (CLI scripts, security audits) parse with `jq`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[non_exhaustive]
+#[serde(deny_unknown_fields)]
 pub struct Manifest {
     /// `tfparser-core` semver.
     pub tfparser_version: String,
@@ -45,6 +46,7 @@ pub struct Manifest {
 /// Per-file entry in the manifest.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[non_exhaustive]
+#[serde(deny_unknown_fields)]
 pub struct ManifestFile {
     /// File name (relative to the output dir).
     pub name: String,
@@ -73,7 +75,10 @@ pub fn write_manifest(
         return Err(ExportError::OutputExists(Arc::from(final_path)));
     }
 
-    let bytes = serde_json::to_vec_pretty(manifest)?;
+    let bytes = serde_json::to_vec_pretty(manifest).map_err(|source| ExportError::Manifest {
+        path: Arc::from(final_path),
+        source,
+    })?;
     let mut partial: std::ffi::OsString = final_path.as_os_str().to_os_string();
     partial.push(".partial");
     let partial = std::path::PathBuf::from(partial);

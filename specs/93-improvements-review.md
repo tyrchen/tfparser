@@ -82,6 +82,50 @@ future phase.
 
 ---
 
+## Phase 3 review (2026-05-13)
+
+### Spec defects — surfaced to the user
+
+| ID | Severity | Where | Issue / fix |
+| -- | -------- | ----- | ----------- |
+| S-007 | P2 | `specs/10-data-model.md § 4` | Canonical-JSON example shows `{"__unresolved__": "var.environment", "__kind__": "Var"}` (insertion order). The frozen rule "Keys sorted alphabetically at every object level" requires `__kind__` to come first under ASCII byte order. Phase 3's renderer is alpha-correct; update the spec example to match (and pin via the `test_should_render_unresolved_keys_in_alpha_byte_order` test). |
+| S-008 | P2 | `specs/10-data-model.md § 4`, `specs/20-parquet-exporter.md § 3.3` | Phase 3 emits five additional sentinels not enumerated in the spec — `__binary_op__`, `__unary_op__`, `__template_concat__`, `__conditional__`, `__for__` — for rich `Expression` nodes that are neither `Unresolved` nor `FuncCall`. Either document the full sentinel taxonomy with their inner schema or fold rich expressions back into `__unresolved__` with verbatim source. |
+| S-009 | P3 | `specs/10-data-model.md § 3` | The schema documents the `kind` column enum (`resource \| data \| module \| output \| variable \| local \| provider`) but not which IR entity sources each row. Phase 3 emits one row per `Variable` / `Local` / `Output` / `ProviderBlock` (and `ModuleCall`) in addition to `Resource`. Add a "Row population" section listing the row sources and which columns are intentionally empty for each. |
+
+### P1 — implementation hygiene (deferred)
+
+| ID | Severity | Where | Fix shape |
+| -- | -------- | ----- | --------- |
+| P-015 | P1 | `crates/core/src/exporter/writer.rs::EmittedRow` | Materialises ~14 owned `String`s per row, then keeps `Vec<EmittedRow>` alive for the whole component before draining. Spec 20 § 3.3 prescribes per-row `Vec<u8>` JSON pooling as the **only** per-row allocation in the hot path. Change `EmittedRow` to borrow (`Cow<'a, str>` / `&'a str`) or yield rows directly from an iterator over the IR. Defer until Phase 9 perf-budget run shows the regression. |
+| P-016 | P1 | `crates/core/src/exporter/writer.rs::CompressionOpt::to_parquet` | `ZstdLevel::try_new(level).unwrap_or_default()` silently sanitises an out-of-range zstd level. CLAUDE.md § Input Validation says reject, don't sanitize. Change `CompressionOpt::Zstd` constructor (or `to_parquet`) to surface `ValidationError`. |
+| P-017 | P1 | `crates/core/src/exporter/writer.rs::ExportOptions::parsed_at_ms` | Bare `Option<i64>` lets bad epochs (e.g. `i64::MIN`) reach the Arrow timestamp builder. Wrap in a `ParsedAt` newtype with a fallible constructor pinning a sane range (≥ 0 and ≤ some far-future ceiling). |
+
+### P2 — implementation hygiene (deferred)
+
+| ID | Severity | Where | Fix shape |
+| -- | -------- | ----- | --------- |
+| P-018 | P2 | `crates/core/src/exporter/writer.rs::flush_batch` + `RowBuilders::batch` | Arrow's `*Builder::finish()` resets the builder and loses the capacity hint. After the first row-group flush, every subsequent batch re-grows from zero. Re-instantiate `RowBuilders` per row group sized to the remaining projected rows, or call `*_builder.reserve(remaining)` after `finish()`. |
+| P-019 | P2 | `crates/core/src/exporter/writer.rs::variable_row` / `output_row` / `local_row` | Variable/output/local rows duplicate IR fields into the synthetic `attributes` AttributeMap that feeds `attributes_json`. Two sources of truth. Render `attributes_json` directly from the IR fields via a small helper to keep one canonical path. |
+| P-020 | P2 | `crates/cli/src/main.rs::run_parse::command_line` | Verbatim `std::env::args().join(" ")` lands in `workspace.manifest.json` with no redaction. M0 has no secret-bearing flags but a future `--token` / `--aws-secret` would leak. Allowlist known flags and redact unknown `--*-token=` / `--*-secret=` values; cap length at 4 KiB. |
+| P-021 | P2 | `crates/core/src/exporter/writer.rs` | No coverage of the "kill the writer mid-stream" failure path (spec 20 § 7). Add a controlled-fault test (e.g. inject a failing inner writer behind a tiny trait) that asserts `<out>/resources.parquet` does not exist while `<out>/resources.parquet.partial` does. |
+| P-022 | P2 | `crates/core/src/exporter/writer.rs` | No test pinning the final row sort order `(component_path, module_path, address)`. The byte-determinism test implies it but does not pin it. Add `test_should_sort_rows_by_component_then_module_then_address` driving two synthetic components with deliberately out-of-order resources. |
+
+### P3 — implementation hygiene (deferred)
+
+| ID | Severity | Where | Fix shape |
+| -- | -------- | ----- | --------- |
+| P-023 | P3 | `crates/core/src/exporter/writer.rs::span_relative_file` | Name promises "relative" but the body just calls `render_path`. The relativisation step (strip workspace-root prefix when an absolute path slips through) is not yet present. Rename or implement; revisit when terragrunt lands and Span.file can be absolute. |
+| P-024 | P3 | root `Cargo.toml::[workspace.dependencies]::tokio` | Pinned but unused (D14: sync + rayon). Either remove or annotate "preserved for the future apps/server crate." |
+| P-025 | P3 | `crates/core/src/exporter/manifest.rs::write_manifest` | Signature takes `&Path`; callers hold `Arc<Path>`. Switch to `&Arc<Path>` so the error paths can `Arc::clone` cheaply instead of re-`Arc::from`. |
+| P-026 | P3 | `crates/core/src/exporter/writer.rs::EmittedRow` | 19 owned fields per row; six per-IR-kind helpers spell every field out. Derive `Default` and use struct-update syntax to halve the boilerplate (or — preferred — adopt P-015's borrowing rewrite which removes the struct entirely). |
+| P-027 | P3 | All Phase 3 module-level docs | Use repo-relative `../../specs/*.md` links that break on docs.rs. Switch to absolute repo URLs (after publishing) or drop the link target. |
+
+### Invalid finding (closed)
+
+- **P0-001** (reviewer): "canonical JSON key order is not alpha-sorted for `FuncCall` / sentinel wrappers." Invalid — the reviewer's premise that `args` < `__unresolved_func__` is wrong: `_` (0x5F) precedes `a` (0x61) in ASCII byte order, so `__unresolved_func__` < `args` and the implementation is already alpha-correct. Byte-pinning tests added in Phase 3 (`test_should_render_*_keys_in_alpha_byte_order`) lock the order against future regressions. Spec 10 § 4's example also needs updating — see S-007.
+
+---
+
 ## How to use this file
 
 When a future phase starts, scan the table above for entries whose `file:line`
