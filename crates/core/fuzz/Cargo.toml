@@ -1,0 +1,29 @@
+[package]
+name = "tfparser-core-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+rust-version = "1.95"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+tfparser-core = { path = ".." }
+
+[[bin]]
+name = "hcl_loader"
+path = "fuzz_targets/hcl_loader.rs"
+test = false
+doc  = false
+bench = false
+
+[lints]
+workspace = true
+
+# cargo-fuzz expects fuzz/ to be its own workspace separate from the host
+# repo. Marking as a stand-alone workspace prevents the parent's lints
+# (which deny `unwrap` etc.) from clashing with libfuzzer's macro-generated
+# code.
+[workspace]

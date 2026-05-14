@@ -214,6 +214,26 @@ pub enum Expression {
     /// Template concatenation, e.g. `"foo-${var.x}-bar"` → parts.
     TemplateConcat(Vec<Expression>),
 
+    /// HCL tuple / array literal whose elements are not all
+    /// [`Expression::Literal`] yet. The loader emits this when the array
+    /// contains at least one [`Expression::Unresolved`] / function call /
+    /// reference; once every element resolves, the evaluator collapses it
+    /// to [`Expression::Literal`] of [`Value::List`].
+    ///
+    /// Per [10-data-model.md § 2.3 expression-and-values lowering table]:
+    /// "tuple / object literals → recurse → [`Value::List`] / [`Value::Map`]
+    /// once children resolved at evaluator phase; during loader, kept as
+    /// expression nodes."
+    ///
+    /// [10-data-model.md § 2.3]: ../../specs/10-data-model.md
+    Array(Vec<Expression>),
+
+    /// HCL object literal whose keys or values are not yet fully resolved.
+    /// Keys are themselves [`Expression`] because HCL allows expression
+    /// keys (`{(var.kind) = "x"}`) — the IR preserves that until the
+    /// evaluator can collapse to a [`Value::Map`].
+    Object(Vec<(Expression, Expression)>),
+
     /// Function call.
     FuncCall(Box<FuncCall>),
 
@@ -244,7 +264,12 @@ impl Expression {
             Self::Unresolved(_) => false,
             Self::BinaryOp { lhs, rhs, .. } => lhs.is_fully_resolved() && rhs.is_fully_resolved(),
             Self::UnaryOp { operand, .. } => operand.is_fully_resolved(),
-            Self::TemplateConcat(parts) => parts.iter().all(Self::is_fully_resolved),
+            Self::TemplateConcat(parts) | Self::Array(parts) => {
+                parts.iter().all(Self::is_fully_resolved)
+            }
+            Self::Object(entries) => entries
+                .iter()
+                .all(|(k, v)| k.is_fully_resolved() && v.is_fully_resolved()),
             Self::FuncCall(call) => call.args.iter().all(Self::is_fully_resolved),
             Self::Conditional(c) => {
                 c.cond.is_fully_resolved()

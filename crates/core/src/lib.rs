@@ -4,10 +4,10 @@
 //! that can be exported as Parquet. This crate exposes the **types and traits**
 //! the pipeline is built around. Implementations land progressively:
 //!
-//! | Phase | Module(s) gated | Status (Phase 1) |
+//! | Phase | Module(s) gated | Status (Phase 2) |
 //! | ----- | --------------- | ---------------- |
-//! | 1 | [`ir`], [`diagnostic`], [`pipeline`], [`error`] | ✅ this commit |
-//! | 2 | `discovery`, `loader` | trait surface only |
+//! | 1 | [`ir`], [`diagnostic`], [`pipeline`], [`error`] | ✅ landed |
+//! | 2 | [`discovery`], [`loader`] | ✅ this phase |
 //! | 3 | `exporter` | not yet |
 //! | 4 | `eval` | not yet |
 //! | 5 | `graph` | not yet |
@@ -30,9 +30,12 @@
 #![warn(missing_docs)]
 
 pub mod diagnostic;
+pub mod discovery;
 pub mod error;
 pub mod ir;
+pub mod loader;
 pub mod pipeline;
+pub(crate) mod util;
 
 pub use diagnostic::{Diagnostic, LimitKind, Severity};
 pub use error::{Error, Result, ValidationError};
