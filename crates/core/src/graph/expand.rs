@@ -244,11 +244,20 @@ fn resolve_module_call<'a>(
 
 /// Expand a single module call site, appending the flattened resources to
 /// `out`. Recurses on nested module calls inside the called module.
+///
+/// `parent_provider_map` carries the provider mapping the caller above
+/// this call established. Per [99-key-decisions.md] D8, the *effective*
+/// map at this call is the current call's `providers` (explicit overrides)
+/// layered on top of the inherited map — so a grand-parent's
+/// `providers = { aws = aws.main }` flows through an intermediary call
+/// that does not redeclare the mapping.
+///
+/// [99-key-decisions.md]: ../../../specs/99-key-decisions.md
 fn expand_module_call(
     call: &ModuleCall,
     caller_dir: &std::path::Path,
     parent_prefix: &Prefix,
-    _parent_provider_map: &[(Arc<str>, ProviderRef)],
+    parent_provider_map: &[(Arc<str>, ProviderRef)],
     state: &mut ExpansionState<'_>,
     depth: u32,
     out: &mut Vec<Resource>,
@@ -262,6 +271,12 @@ fn expand_module_call(
             CallResolution::Skip => return,
         };
     let module_eval = &module_eval_clone;
+
+    // Compute the effective provider map: current call's explicit entries
+    // override any inherited ones; keys the current call doesn't mention
+    // inherit from the parent. Fixes provider-map drift through nested
+    // expansions (Phase 5 review P1).
+    let effective_provider_map = merge_provider_maps(parent_provider_map, &call.providers);
 
     // Per-call-site index expansion: when `count` or `for_each` resolved
     // to a literal, we expand into multiple call instances each with its
@@ -280,10 +295,17 @@ fn expand_module_call(
         // Expand resources / data into the parent. Each gets:
         // 1. its address prefixed with the module call chain;
         // 2. every `var.X` substituted from the call's inputs;
-        // 3. its provider_ref rewritten via the call's providers map.
+        // 3. its provider_ref rewritten via the effective providers map.
         for r in &module_eval.resources {
-            let expanded = rewrite_resource(r, &inner_prefix, &call.inputs, &call.providers);
-            out.push(expanded);
+            if let Some(expanded) = rewrite_resource(
+                r,
+                &inner_prefix,
+                &call.inputs,
+                &effective_provider_map,
+                &mut state.diagnostics,
+            ) {
+                out.push(expanded);
+            }
         }
 
         // Recurse into nested module calls inside the called module.
@@ -299,7 +321,7 @@ fn expand_module_call(
                 &nested_call_substituted,
                 &nested_caller_dir,
                 &inner_prefix,
-                &call.providers,
+                &effective_provider_map,
                 state,
                 depth + 1,
                 out,
@@ -308,6 +330,36 @@ fn expand_module_call(
 
         state.stack.pop();
     }
+}
+
+/// Compute `parent ∪ current` where `current` overrides on shared keys.
+/// Used to thread provider mappings through nested module expansions so a
+/// grand-parent's mapping continues to apply through an intermediary
+/// silent call.
+fn merge_provider_maps(
+    parent: &[(Arc<str>, ProviderRef)],
+    current: &[(Arc<str>, ProviderRef)],
+) -> Vec<(Arc<str>, ProviderRef)> {
+    if parent.is_empty() {
+        return current.to_vec();
+    }
+    if current.is_empty() {
+        return parent.to_vec();
+    }
+    let mut out: Vec<(Arc<str>, ProviderRef)> = Vec::with_capacity(parent.len() + current.len());
+    // Start with parent's entries.
+    for (k, v) in parent {
+        out.push((Arc::clone(k), v.clone()));
+    }
+    // Apply current's entries, overriding where they collide.
+    for (k, v) in current {
+        if let Some(slot) = out.iter_mut().find(|(pk, _)| pk == k) {
+            slot.1 = v.clone();
+        } else {
+            out.push((Arc::clone(k), v.clone()));
+        }
+    }
+    out
 }
 
 fn format_chain(stack: &[Arc<std::path::Path>]) -> String {
@@ -454,13 +506,38 @@ fn escape_address_key(s: &str) -> String {
 
 /// Build an expanded copy of a module-body resource: prefixed address,
 /// substituted attributes, rewritten provider ref.
+///
+/// Returns `None` when the prefixed address fails [`Address`] validation
+/// (length > [`crate::ir::ADDRESS_MAX_BYTES`], or out-of-charset bytes from
+/// a `for_each` key). The caller surfaces a `TF1507` diagnostic via the
+/// supplied sink and drops the resource — keeping I-GRAPH-1 (address
+/// uniqueness) precise rather than letting `prefix_address` collapse two
+/// addresses to the same un-prefixed string.
 fn rewrite_resource(
     src: &Resource,
     prefix: &Prefix,
     inputs: &AttributeMap,
     provider_map: &[(Arc<str>, ProviderRef)],
-) -> Resource {
-    let new_address = prefix_address(&src.address, prefix);
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Option<Resource> {
+    let new_address = match prefix_address(&src.address, prefix) {
+        Ok(a) => a,
+        Err(reason) => {
+            diagnostics.push(
+                Diag::new(
+                    Severity::Warn,
+                    "TF1507",
+                    format!(
+                        "dropping module-expanded resource: prefixed address fails validation \
+                         ({reason}) at {}",
+                        src.address
+                    ),
+                )
+                .with_span(src.span.clone()),
+            );
+            return None;
+        }
+    };
     let count_expr = src
         .count_expr
         .as_ref()
@@ -475,30 +552,35 @@ fn rewrite_resource(
         .as_ref()
         .map(|r| substitute_provider_ref(r, provider_map));
 
-    Resource::builder()
-        .address(new_address)
-        .kind(src.kind)
-        .type_(Arc::clone(&src.type_))
-        .name(Arc::clone(&src.name))
-        .provider_ref(provider_ref)
-        .count_expr(count_expr)
-        .for_each_expr(for_each_expr)
-        .depends_on(src.depends_on.clone())
-        .attributes(attributes)
-        .span(src.span.clone())
-        .build()
+    Some(
+        Resource::builder()
+            .address(new_address)
+            .kind(src.kind)
+            .type_(Arc::clone(&src.type_))
+            .name(Arc::clone(&src.name))
+            .provider_ref(provider_ref)
+            .count_expr(count_expr)
+            .for_each_expr(for_each_expr)
+            .depends_on(src.depends_on.clone())
+            .attributes(attributes)
+            .span(src.span.clone())
+            .build(),
+    )
 }
 
-/// Construct a new `Address` with the prefix applied. Falls back to the
-/// original address if the prefix is empty or the resulting string fails
-/// validation — never panics.
-pub(super) fn prefix_address(addr: &Address, prefix: &Prefix) -> Address {
+/// Construct a new `Address` with the prefix applied. Returns the
+/// validation error verbatim when the combined string fails
+/// [`Address::new`] (length / charset).
+pub(super) fn prefix_address(
+    addr: &Address,
+    prefix: &Prefix,
+) -> Result<Address, crate::error::ValidationError> {
     let prefix_str = prefix.render();
     if prefix_str.is_empty() {
-        return addr.clone();
+        return Ok(addr.clone());
     }
     let combined = format!("{}.{}", prefix_str, addr.as_str());
-    Address::new(&combined).unwrap_or_else(|_| addr.clone())
+    Address::new(&combined)
 }
 
 /// Apply input substitution across an [`AttributeMap`].
@@ -702,7 +784,7 @@ fn expand_with_count(
                 return vec![template_row(resource)];
             }
             (0..*n)
-                .map(|i| with_indexed_address(&resource, &format!("[{i}]")))
+                .filter_map(|i| with_indexed_address(&resource, &format!("[{i}]"), diagnostics))
                 .collect()
         }
         // Unresolved → keep one template row carrying the count expression.
@@ -740,10 +822,11 @@ fn expand_with_for_each(
             }
             entries
                 .iter()
-                .map(|(k, _)| {
+                .filter_map(|(k, _)| {
                     with_indexed_address(
                         &resource,
                         &format!("[\"{}\"]", escape_address_key(k.as_ref())),
+                        diagnostics,
                     )
                 })
                 .collect()
@@ -768,10 +851,11 @@ fn expand_with_for_each(
             items
                 .iter()
                 .filter_map(|v| match v {
-                    Value::Str(s) => Some(with_indexed_address(
+                    Value::Str(s) => with_indexed_address(
                         &resource,
                         &format!("[\"{}\"]", escape_address_key(s.as_ref())),
-                    )),
+                        diagnostics,
+                    ),
                     _ => None,
                 })
                 .collect()
@@ -780,19 +864,42 @@ fn expand_with_for_each(
     }
 }
 
-fn with_indexed_address(resource: &Resource, suffix: &str) -> Resource {
+fn with_indexed_address(
+    resource: &Resource,
+    suffix: &str,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Option<Resource> {
     let combined = format!("{}{}", resource.address.as_str(), suffix);
-    let new_addr = Address::new(&combined).unwrap_or_else(|_| resource.address.clone());
-    Resource::builder()
-        .address(new_addr)
-        .kind(resource.kind)
-        .type_(Arc::clone(&resource.type_))
-        .name(Arc::clone(&resource.name))
-        .provider_ref(resource.provider_ref.clone())
-        .depends_on(resource.depends_on.clone())
-        .attributes(resource.attributes.clone())
-        .span(resource.span.clone())
-        .build()
+    let new_addr = match Address::new(&combined) {
+        Ok(a) => a,
+        Err(reason) => {
+            diagnostics.push(
+                Diag::new(
+                    Severity::Warn,
+                    "TF1507",
+                    format!(
+                        "dropping expanded resource: indexed address fails validation ({reason}) \
+                         at {}",
+                        resource.address
+                    ),
+                )
+                .with_span(resource.span.clone()),
+            );
+            return None;
+        }
+    };
+    Some(
+        Resource::builder()
+            .address(new_addr)
+            .kind(resource.kind)
+            .type_(Arc::clone(&resource.type_))
+            .name(Arc::clone(&resource.name))
+            .provider_ref(resource.provider_ref.clone())
+            .depends_on(resource.depends_on.clone())
+            .attributes(resource.attributes.clone())
+            .span(resource.span.clone())
+            .build(),
+    )
 }
 
 fn template_row(resource: Resource) -> Resource {
@@ -803,7 +910,12 @@ fn template_row(resource: Resource) -> Resource {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::indexing_slicing, clippy::panic)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::indexing_slicing,
+    clippy::panic
+)]
 mod tests {
     use super::*;
     use crate::ir::{ResourceKind, Span, Symbolic};
@@ -880,7 +992,7 @@ mod tests {
             index: None,
         };
         let addr = Address::new("aws_s3_bucket.this").unwrap();
-        let prefixed = prefix_address(&addr, &prefix);
+        let prefixed = prefix_address(&addr, &prefix).unwrap();
         assert_eq!(prefixed.as_str(), "module.edge_logs.aws_s3_bucket.this");
     }
 
@@ -892,8 +1004,37 @@ mod tests {
             index: Some("[0]".to_string()),
         };
         let addr = Address::new("aws_s3_bucket.this").unwrap();
-        let prefixed = prefix_address(&addr, &prefix);
+        let prefixed = prefix_address(&addr, &prefix).unwrap();
         assert_eq!(prefixed.as_str(), "module.bucket[0].aws_s3_bucket.this");
+    }
+
+    #[test]
+    fn test_prefix_address_overflow_emits_diagnostic_and_drops_resource() {
+        // 8 nested module prefixes × 128-byte names blows past
+        // ADDRESS_MAX_BYTES=1024. We construct that scenario directly:
+        let mut prefix = Prefix::Root;
+        for _ in 0..16 {
+            prefix = Prefix::Step {
+                parent: Box::new(prefix),
+                name: Arc::from("a".repeat(120).as_str()),
+                index: None,
+            };
+        }
+        let addr = Address::new("aws_s3_bucket.this").unwrap();
+        let err = prefix_address(&addr, &prefix);
+        assert!(err.is_err(), "expected validation error, got {err:?}");
+        // And the wrapped rewrite_resource drops the resource cleanly.
+        let r = Resource::builder()
+            .address(addr)
+            .kind(ResourceKind::Managed)
+            .type_(Arc::<str>::from("aws_s3_bucket"))
+            .name(Arc::<str>::from("this"))
+            .span(span())
+            .build();
+        let mut diagnostics: Vec<Diagnostic> = Vec::new();
+        let dropped = rewrite_resource(&r, &prefix, &Vec::new(), &Vec::new(), &mut diagnostics);
+        assert!(dropped.is_none());
+        assert!(diagnostics.iter().any(|d| &*d.code == "TF1507"));
     }
 
     #[test]
@@ -913,6 +1054,46 @@ mod tests {
         };
         let out = substitute_provider_ref(&inner, &map);
         assert_eq!(out.alias.as_deref().map(|s| s as &str), Some("main"));
+    }
+
+    #[test]
+    fn test_merge_provider_maps_layers_parent_under_current() {
+        let parent: Vec<(Arc<str>, ProviderRef)> = vec![
+            (
+                Arc::from("aws"),
+                ProviderRef {
+                    local_name: Arc::from("aws"),
+                    alias: Some(Arc::from("main")),
+                    span: span(),
+                },
+            ),
+            (
+                Arc::from("google"),
+                ProviderRef {
+                    local_name: Arc::from("google"),
+                    alias: Some(Arc::from("primary")),
+                    span: span(),
+                },
+            ),
+        ];
+        // Current call overrides `aws` but says nothing about `google`.
+        let current: Vec<(Arc<str>, ProviderRef)> = vec![(
+            Arc::from("aws"),
+            ProviderRef {
+                local_name: Arc::from("aws"),
+                alias: Some(Arc::from("us-east-2")),
+                span: span(),
+            },
+        )];
+        let merged = merge_provider_maps(&parent, &current);
+        // `aws` overridden, `google` inherited.
+        let aws = merged.iter().find(|(k, _)| &**k == "aws").unwrap();
+        assert_eq!(aws.1.alias.as_deref().map(|s| s as &str), Some("us-east-2"));
+        let google = merged.iter().find(|(k, _)| &**k == "google").unwrap();
+        assert_eq!(
+            google.1.alias.as_deref().map(|s| s as &str),
+            Some("primary")
+        );
     }
 
     #[test]
@@ -1026,8 +1207,10 @@ mod tests {
                 .attributes(attrs.clone())
                 .span(span())
                 .build();
+            let mut diagnostics: Vec<Diagnostic> = Vec::new();
             // Path 1: rewrite-then-substitute.
-            let rewritten = rewrite_resource(&r, &prefix, &Vec::new(), &Vec::new());
+            let rewritten = rewrite_resource(&r, &prefix, &Vec::new(), &Vec::new(), &mut diagnostics)
+                .expect("rewrite_resource succeeds for short addresses");
             let r1_attrs = substitute_inputs_in_attrs(&rewritten.attributes, &inputs);
             let r1_addr = rewritten.address.clone();
             // Path 2: substitute-then-rewrite.
@@ -1040,7 +1223,8 @@ mod tests {
                 .attributes(substituted_attrs)
                 .span(r.span.clone())
                 .build();
-            let r2 = rewrite_resource(&substituted, &prefix, &Vec::new(), &Vec::new());
+            let r2 = rewrite_resource(&substituted, &prefix, &Vec::new(), &Vec::new(), &mut diagnostics)
+                .expect("rewrite_resource succeeds for short addresses");
             proptest::prop_assert_eq!(r1_addr.as_str(), r2.address.as_str());
             proptest::prop_assert_eq!(r1_attrs, r2.attributes);
         }

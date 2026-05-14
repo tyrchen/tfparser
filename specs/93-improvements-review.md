@@ -202,6 +202,52 @@ future phase.
 
 ---
 
+## Phase 5 review — independent code review (2026-05-14)
+
+### Fixed in-phase
+
+| ID | Severity | Where | Fix |
+| -- | -------- | ----- | --- |
+| F-019 | P1 | `crates/core/src/graph/expand.rs::expand_module_call` | Provider-map cascade dropped through nested calls (`_parent_provider_map` discarded). Added `merge_provider_maps(parent, current)` helper that layers parent's mapping under current's overrides, and threaded the effective map through both `rewrite_resource` and the recursive `expand_module_call` site. Test pins the layering at `graph::expand::tests::test_merge_provider_maps_layers_parent_under_current`. |
+| F-020 | P1 | `crates/core/src/graph/expand.rs::prefix_address` / `with_indexed_address` | Silent `unwrap_or_else(|_| addr.clone())` on `Address::new` failure produced bogus address collisions only surfaceable as `TF1506`. Changed both to return `Result<_, ValidationError>` and surface `TF1507` (drop the resource) instead. Test `test_prefix_address_overflow_emits_diagnostic_and_drops_resource` pins. |
+
+### Invalid finding (closed)
+
+- *Reviewer's P1 on cycle-stack push-after-resolve*: The existing
+  `test_should_detect_module_self_cycle_and_emit_diagnostic` already
+  exercises the one-level self-cycle case (caller → mod, mod has
+  `module "self" { source = "." }`). When `mod` is pushed on the stack
+  at the start of expanding the caller's call, the nested `self` call's
+  resolver lookup sees `mod` on the stack and trips cycle detection on
+  the **first** descent into self. There is no extra push-before-resolve
+  fix required because top-level Module-kind components are skipped by
+  the builder's kind=Component filter. Closing as invalid.
+
+### Deferred to a future phase
+
+| ID | Severity | Where | Fix shape |
+| -- | -------- | ----- | --------- |
+| P-041 | P2 | `crates/core/src/graph/registry.rs::ModuleRegistry::local_modules` | `HashMap<Arc<Path>, EvaluatedComponent>` is read-only after orchestrator build; if Phase 8 starts concurrent reads, swap for `DashMap` per CLAUDE.md § Async & Concurrency. |
+| P-042 | P2 | `crates/core/src/graph/registry.rs::ExternalModuleRef` | No test exercises `record_external`. Pin the contract before Phase 8 consumes it for `modules.parquet`. |
+| P-043 | P2 | `crates/core/src/graph/expand.rs::format_chain` | Always appends `"…"` even when the stack is empty. Render only the stack segments. |
+| P-044 | P2 | `crates/core/src/graph/expand.rs::template_row` | No-op identity function. Inline at call sites or evolve to clear the address-index suffix when one was accidentally set. |
+| P-045 | P2 | `crates/core/src/graph/expand.rs` (per-instance Resource clone) | `count = 100` clones every resource 100×. Hoist invariant substitutions (provider rewrite) out of the index loop; consider lazy attribute substitution. |
+| P-046 | P3 | `crates/core/src/graph/expand.rs::instances_for_for_each` (list case) | Non-string list elements drop silently → zero instances, no diagnostic. Emit a `TF1505`-style diagnostic or keep the template row. |
+| P-047 | P3 | `crates/core/src/graph/expand.rs::rewrite_resource` (depends_on) | `src.depends_on` is cloned verbatim, not prefixed with the module call chain. Phase 8 (edge inference) is the natural fix site. |
+| P-048 | P3 | `crates/core/src/graph/builder.rs::build_workspace_modules` | `to_string_lossy()` silently mangles non-UTF-8 paths. Switch to a canonical-form helper or capture the original `source_raw` from a known call site. |
+| P-049 | P3 | `crates/core/src/graph/builder.rs::build` | Module-kind components' diagnostics (cycles in module locals, file-sandbox rejects) are dropped — only kind=Component diagnostics are appended. Append `module_eval.diagnostics` to the workspace buffer too. |
+
+### Spec defects — surfaced to the user
+
+| ID | Severity | Where | Issue / fix |
+| -- | -------- | ----- | ----------- |
+| S-014 | P2 | `specs/15-resource-graph.md § 2` | Spec declares `GraphBuilder::build` taking `modules: ModuleRegistry` (owned) and `GraphContext` with three fields. Impl uses `&ModuleRegistry` (more efficient) and adds `max_expansion_per_resource: u32` (the cap from § 3.3). Update spec § 2 to take `&ModuleRegistry` and list `max_expansion_per_resource`. |
+| S-015 | P3 | `specs/15-resource-graph.md § 3.3` | "one template row with `count_expr` set to the verbatim source" — the IR's `count_expr` is `Expression` (typed), not "verbatim source." Update spec wording. Cross-ref S-008. |
+| S-016 | P3 | `specs/15-resource-graph.md § 6 I-GRAPH-3` | Idempotency invariant has no dedicated test. Commutativity proptest is adjacent but a different property. Add an idempotency test or downgrade the invariant. |
+| S-017 | P2 | `specs/15-resource-graph.md § 3.2 #4` | "If the module body uses a `default` aws provider, it inherits the *call site's* default." Impl behaviour: `substitute_provider_ref` only rewrites when the call's `providers` map has a matching `local_name`; absent that, the body's `aws` default already points at the parent's provider block list, so the no-rewrite behaviour is correct. Document the implicit "default propagation = absence of rewrite" in the spec. |
+
+---
+
 ## How to use this file
 
 When a future phase starts, scan the table above for entries whose `file:line`
