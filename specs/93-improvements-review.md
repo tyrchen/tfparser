@@ -248,6 +248,51 @@ future phase.
 
 ---
 
+## Phase 6 review — independent code review (2026-05-14)
+
+### Fixed in-phase
+
+| ID | Severity | Where | Fix |
+| -- | -------- | ----- | --- |
+| F-021 | P1 | `crates/core/src/terragrunt/resolver.rs::ReadTerragruntConfigFn` | Recursive `read_terragrunt_config` calls used a fresh `FuncRegistry::default_with_stdlib()` that did **not** include TG funcs, so transitive `find_in_parent_folders` / `get_repo_root` etc. inside the parent's locals stayed unresolved. Replaced with a late-bound `Arc<OnceLock<Arc<FuncRegistry>>>` that the resolver populates immediately after constructing the registry — the recursive read now sees the same TG function set. Regression: `test_recursive_read_sees_terragrunt_functions`. |
+| F-022 | P1 | `crates/core/src/terragrunt/resolver.rs::backend_from_terraform_body` | Hardcoded `kind = "s3"` for every nested `backend` block because the original logic relied on a `"backend.kind"` key that the loader never produces — labels live inside the resulting `Expression::Object` under the synthetic `__labels__` key (cross-ref S-006). Rewrote to read `__labels__` and use the first label as the backend kind. |
+| F-023 | P1 | `crates/core/src/terragrunt/resolver.rs::apply_cascade` | `map_to_locals` discarded the parent layer's non-literal locals every time the cascade moved on to a child layer, so a `root.hcl` declaring `merged_vars = merge(env_vars.locals, ...)` would silently vanish if any other layer followed it. Added `map_to_locals_with_inherited` that accumulates non-literal locals across layers (child overrides parent by name; merged-literal map wins on conflict). Regression: `test_parent_layer_non_literal_locals_survive_cascade`. |
+
+### Deferred to a future phase
+
+| ID | Severity | Where | Fix shape |
+| -- | -------- | ----- | --------- |
+| P-063 | P2 | `crates/core/src/terragrunt/resolver.rs::ReadTerragruntConfigFn::call` | `inflight` machinery never fires under normal flow (cycle stack catches re-entry first). Replace the inflight insert with `debug_assert!(!inflight.contains_key(...))` and remove the cleanup branches, or document why it's defence-in-depth. |
+| P-064 | P2 | `crates/core/src/terragrunt/funcs.rs::TryFn` | `try(value, fallback)` is a value-level pass-through; cannot rescue an inner FuncCall that surfaced as `Unresolved`. Special-case `try` in `eval::reduce::reduce_expression`'s FuncCall arm so it inspects its first arg expression and falls through to the fallback on non-Literal. Cross-ref spec defect S-018. |
+| P-065 | P2 | `crates/core/src/terragrunt/resolver.rs::parse_merge_strategy` | Silent default on unknown / non-literal `merge_strategy` values — violates CLAUDE.md "reject, don't sanitize." Emit `TG2010` diagnostic. |
+| P-066 | P2 | `crates/core/src/terragrunt/funcs.rs::find_in_parents` | Uses `SymlinkPolicy::Follow`; per [70-security.md § 3.1 P2] tighten to `Reject` for `find_in_parent_folders` while keeping `Follow` only for user-supplied `read_terragrunt_config` paths. |
+| P-067 | P2 | `crates/core/src/terragrunt/resolver.rs::backend_from_terraform_body` | `StateBackend::span` is always `Span::synthetic()`. Propagate the source span from the `terraform { ... }` block or the `generate "backend"` block. |
+| P-068 | P2 | `crates/core/src/terragrunt/resolver.rs::evaluate_locals` | Magic-number 16-iteration cap. Lift to `EvalLimits::max_iterations` or a new `max_locals_passes`. |
+| P-069 | P3 | `crates/core/src/terragrunt/resolver.rs::evaluate_inputs` | Drops non-literal-reduced inputs silently. Either keep partial shapes or emit a diagnostic per dropped input. |
+| P-070 | P3 | `crates/core/src/terragrunt/resolver.rs` (module attr) | `#![allow(clippy::too_many_lines)]` is justified for `resolve()` but `resolve()` itself can split off `assemble_terragrunt_config(...)`. |
+| P-071 | P3 | `crates/core/src/terragrunt/resolver.rs::build_dependencies` | `config_path` built via `component_dir.join(s)` without `canonicalize_inside`. Route through path sandbox; drop deps that escape. |
+| P-072 | P3 | `crates/core/tests/terragrunt_cascade.rs::test_memo_avoids_double_parse_of_same_path` | Does not actually pin single-flight (only verifies the cached map is returned). Add a counter (custom resolver double or tracing subscriber) and assert `read_count == 1`. |
+| P-073 | P3 | `crates/core/src/terragrunt/parsed.rs::project` (Inputs arm) | `BlockKind::Inputs` arm is dead (the loader classifies `inputs = { ... }` as Unknown attr). Remove or document. |
+| P-074 | P3 | `crates/core/src/eval/reduce.rs::descend_attributes` | Tests cover the happy path (`local.a.b` on Map). Add explicit non-Map / List short-circuit tests. |
+| P-075 | P3 | `crates/core/fuzz/fuzz_targets/terragrunt.rs` | Harness writes only one `terragrunt.hcl`; plant a `root.hcl` and `common.terragrunt.hcl` to widen reach into cycle/merge code paths. |
+| P-076 | P3 | `fixtures/large-monorepo/` | Spec 91 § 9 Phase 6.8 says ~30 components; fixture has 7. Either reduce the spec target or grow the fixture. |
+
+### Spec defects — surfaced to the user
+
+| ID | Severity | Where | Issue / fix |
+| -- | -------- | ----- | ----------- |
+| S-018 | P2 | `specs/14-terragrunt.md § 3.3` | `try(value, fallback)` described at the value level. Terraform's actual `try` is an expression-level rescuer; our value-level implementation cannot recover from an inner `FuncCall` that surfaced as `Unresolved`. Document the limitation or pin a Phase-9 redesign. |
+| S-019 | P2 | `specs/14-terragrunt.md § 3.5` | Spec assumes `terraform { backend "s3" {} }` lowers as a labelled-nested-block accessible by label. Actual loader lowering keeps labels inside `__labels__` (cross-ref S-006). Document explicitly. |
+| S-020 | P3 | `specs/14-terragrunt.md § 5 I-TG-1` | Pin `SymlinkPolicy::Follow` (chosen here for `read_terragrunt_config`) explicitly with rationale; document that `Follow` upholds the "under workspace_root" invariant via the descendant-of-root check. |
+
+### Invalid findings (closed)
+
+- Reviewer's concern about `visited` set sharing across recursion levels: the `visited` HashSet at `resolver.rs:155-156` is correctly shared — passed as `&mut HashSet<PathBuf>` through every recursive call. Test `test_detects_include_cycle` exercises the case. Closed.
+- Reviewer's concern about the `inflight` DashMap race: re-reading the code confirms memo-hit returns before `inflight.insert`, cycle check returns before the insert, and every fallible path after the insert removes the entry. No leak; tracked as P-063 for the broader cleanup question.
+- Reviewer's concern about `RefCell` for `active_include`: `HclFunc` requires `Send + Sync`; `RefCell` is `!Sync`, so `Mutex` is the correct choice. Closing.
+
+---
+
 ## How to use this file
 
 When a future phase starts, scan the table above for entries whose `file:line`

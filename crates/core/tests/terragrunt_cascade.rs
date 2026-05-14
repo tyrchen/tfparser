@@ -124,6 +124,98 @@ fn test_path_escape_in_read_terragrunt_config_falls_back() {
     }
 }
 
+/// Regression for F-021 — `read_terragrunt_config` recursive reads must
+/// see the TG function set (so `get_repo_root` / `get_terragrunt_dir`
+/// remain dispatchable inside the parent's locals).
+#[test]
+fn test_recursive_read_sees_terragrunt_functions() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = std::fs::canonicalize(tmp.path()).unwrap();
+    // grandparent: declares `here = get_terragrunt_dir()` — a TG-func
+    // call inside *its own* locals. When the child loads it via
+    // `read_terragrunt_config(find_in_parent_folders(...))`, the
+    // recursive reduction must dispatch `get_terragrunt_dir`.
+    std::fs::write(
+        root.join("grandparent.hcl"),
+        "locals { here = get_terragrunt_dir() }\n",
+    )
+    .unwrap();
+    std::fs::create_dir_all(root.join("c")).unwrap();
+    std::fs::write(
+        root.join("c/terragrunt.hcl"),
+        // `find_in_parent_folders` returns an absolute path, so the
+        // recursive read avoids the workspace-root-relative escape and
+        // hits the recursive code path.
+        "locals {\n  gp = read_terragrunt_config(find_in_parent_folders(\"grandparent.hcl\"))\n}\n",
+    )
+    .unwrap();
+    let ctx = TgContext::new(Arc::from(root.as_path()));
+    let cfg = FsTerragruntResolver::new()
+        .resolve(&root.join("c"), &ctx)
+        .unwrap();
+    // gp.locals.here should resolve to *some* string (the grandparent's
+    // terragrunt dir). Pre-F-021 the recursive read used a fresh registry
+    // without TG funcs, so `here` stayed unresolved.
+    let gp = cfg.effective_locals.iter().find(|(k, _)| &**k == "gp");
+    let Some((_, Value::Map(gp_map))) = gp else {
+        panic!("expected gp local; got {:?}", cfg.effective_locals);
+    };
+    let locals_v = gp_map.iter().find(|(k, _)| &**k == "locals");
+    let Some((_, Value::Map(locals_map))) = locals_v else {
+        panic!("expected locals map under gp; got {gp_map:?}");
+    };
+    let here = locals_map.iter().find(|(k, _)| &**k == "here");
+    assert!(
+        matches!(here, Some((_, Value::Str(_)))),
+        "expected here local to resolve to a string via get_terragrunt_dir(); got {locals_map:?}"
+    );
+}
+
+/// Regression for F-023 — parent layer non-literal locals must survive
+/// through cascade layers that come after them.
+#[test]
+fn test_parent_layer_non_literal_locals_survive_cascade() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = std::fs::canonicalize(tmp.path()).unwrap();
+    // root.hcl declares a non-literal local (depends on another local).
+    std::fs::write(
+        root.join("root.hcl"),
+        "locals { base = \"acme\" }\nlocals { derived = local.base }\n",
+    )
+    .unwrap();
+    // Intermediate layer has its own (unrelated) locals.
+    std::fs::write(
+        root.join("middle.hcl"),
+        "include \"root\" { path = find_in_parent_folders(\"root.hcl\") }\nlocals { mid = 1 }\n",
+    )
+    .unwrap();
+    // Child includes middle.
+    std::fs::create_dir_all(root.join("c")).unwrap();
+    std::fs::write(
+        root.join("c/terragrunt.hcl"),
+        "include \"middle\" { path = find_in_parent_folders(\"middle.hcl\") }\n",
+    )
+    .unwrap();
+    let ctx = TgContext::new(Arc::from(root.as_path()));
+    let cfg = FsTerragruntResolver::new()
+        .resolve(&root.join("c"), &ctx)
+        .unwrap();
+    // The chain order is parent-first (root.hcl), then middle, then
+    // child. Pre-F-023 the child layer's `map_to_locals` discarded the
+    // root layer's non-literals at the moment the cascade moved on.
+    // After the fix, `derived` must resolve to `"acme"` once the
+    // evaluator pass runs.
+    let derived = cfg.effective_locals.iter().find(|(k, _)| &**k == "derived");
+    assert!(
+        matches!(
+            derived,
+            Some((_, Value::Str(s))) if s.as_ref() == "acme"
+        ),
+        "expected derived = \"acme\"; got {:?}",
+        cfg.effective_locals
+    );
+}
+
 #[test]
 fn test_memo_avoids_double_parse_of_same_path() {
     // Two `read_terragrunt_config` calls pointing at the same canonical
@@ -138,8 +230,10 @@ fn test_memo_avoids_double_parse_of_same_path() {
     std::fs::create_dir_all(root.join("c")).unwrap();
     std::fs::write(
         root.join("c/terragrunt.hcl"),
-        "locals {\n  a = read_terragrunt_config(\"../parent.hcl\")\n  b = \
-         read_terragrunt_config(\"../parent.hcl\")\n}\n",
+        // Both call sites resolve to the same canonical path; the second
+        // call hits the dashmap memo single-flight.
+        "locals {\n  a = read_terragrunt_config(find_in_parent_folders(\"parent.hcl\"))\n  b = \
+         read_terragrunt_config(find_in_parent_folders(\"parent.hcl\"))\n}\n",
     )
     .unwrap();
     let ctx = TgContext::new(Arc::from(root.as_path()));

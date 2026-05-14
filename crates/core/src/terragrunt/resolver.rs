@@ -20,7 +20,10 @@
 // invent intermediate types only the resolver would use.
 #![allow(clippy::too_many_lines)]
 
-use std::{path::Path, sync::Arc};
+use std::{
+    path::Path,
+    sync::{Arc, OnceLock},
+};
 
 use dashmap::DashMap;
 
@@ -123,16 +126,25 @@ impl TerragruntResolver for FsTerragruntResolver {
         let loader_limits = LoaderLimits::default();
         let eval_limits = EvalLimits::default();
 
+        // `ReadTerragruntConfigFn` recursively reduces parent locals — and
+        // those locals may themselves call `read_terragrunt_config`,
+        // `find_in_parent_folders`, etc. To dispatch correctly the function
+        // needs the *same* TG registry it lives in. We break the cycle via
+        // an `Arc<OnceLock<Arc<FuncRegistry>>>` populated immediately after
+        // the registry is built (F-021).
+        let registry_slot: Arc<OnceLock<Arc<FuncRegistry>>> = Arc::new(OnceLock::new());
         let funcs = Arc::new(build_func_registry(
             Arc::clone(&tg_state),
             Arc::clone(&memo),
             Arc::clone(&stack),
             Arc::clone(&inflight),
+            Arc::clone(&registry_slot),
             ctx,
             loader,
             loader_limits,
             eval_limits,
         ));
+        let _ = registry_slot.set(Arc::clone(&funcs));
 
         let tg_hcl = component_dir_arc.join("terragrunt.hcl");
         let Some(parsed_root) = read_and_project(
@@ -453,7 +465,19 @@ fn apply_cascade(chain: &[ChainEntry], _diagnostics: &mut Vec<Diagnostic>) -> Pa
         let parent_locals = literal_map_for(&acc.locals);
         let child_locals = literal_map_for(&entry.parsed.locals);
         let merged_locals = merge_locals(&parent_locals, &child_locals, entry.merge_strategy);
-        acc.locals = map_to_locals(&merged_locals, &entry.parsed);
+        // Accumulate non-literal locals across layers — both the parent's
+        // and the child's. The child's entries override the parent's by
+        // name. Without this, a parent layer's `merged_vars = merge(...)`
+        // (non-literal until the evaluator runs) gets dropped the moment
+        // the cascade moves on to a child layer (F-023 fix).
+        let prior_non_literals: Vec<crate::ir::Local> = acc
+            .locals
+            .iter()
+            .filter(|l| !matches!(l.value, Expression::Literal(_)))
+            .cloned()
+            .collect();
+        acc.locals =
+            map_to_locals_with_inherited(&merged_locals, &entry.parsed, &prior_non_literals);
 
         // Inputs: only inherit the parent's inputs when the child does
         // not declare one. (Terragrunt-canonical behaviour: a child
@@ -509,21 +533,47 @@ fn literal_map_for(locals: &[crate::ir::Local]) -> Map {
 /// (typically references to other locals or to `read_terragrunt_config`
 /// outputs) are retained verbatim so the subsequent evaluator pass can
 /// reduce them.
-fn map_to_locals(merged_map: &Map, parsed: &ParsedTerragrunt) -> Vec<crate::ir::Local> {
-    let mut out: Vec<crate::ir::Local> = parsed
+///
+/// `inherited` carries non-literal locals from earlier cascade layers
+/// (parent → child); the child layer's non-literals override any
+/// inherited entry with the same name. This is the F-023 fix: without
+/// the inherited list, a parent's `merged_vars = merge(...)` would be
+/// dropped when the cascade moves on to the child.
+fn map_to_locals_with_inherited(
+    merged_map: &Map,
+    parsed: &ParsedTerragrunt,
+    inherited: &[crate::ir::Local],
+) -> Vec<crate::ir::Local> {
+    let mut out: Vec<crate::ir::Local> = Vec::new();
+    // 1) Start with inherited non-literals.
+    for l in inherited {
+        out.push(l.clone());
+    }
+    // 2) Add this layer's non-literals; later override earlier on name.
+    for l in parsed
         .locals
         .iter()
         .filter(|l| !matches!(l.value, Expression::Literal(_)))
-        .cloned()
-        .collect();
+    {
+        if let Some(slot) = out.iter_mut().find(|x| x.name == l.name) {
+            *slot = l.clone();
+        } else {
+            out.push(l.clone());
+        }
+    }
+    // 3) Append the merged literal map. Literals win over any non-literal sharing the same name (a
+    //    downstream layer that knows the value overrides an upstream layer that needed reduction).
     for (k, v) in merged_map {
-        out.push(
-            crate::ir::Local::builder()
-                .name(Arc::clone(k))
-                .value(Expression::Literal(v.clone()))
-                .span(crate::ir::Span::synthetic())
-                .build(),
-        );
+        let local = crate::ir::Local::builder()
+            .name(Arc::clone(k))
+            .value(Expression::Literal(v.clone()))
+            .span(crate::ir::Span::synthetic())
+            .build();
+        if let Some(slot) = out.iter_mut().find(|x| x.name == *k) {
+            *slot = local;
+        } else {
+            out.push(local);
+        }
     }
     out
 }
@@ -838,33 +888,37 @@ fn extract_state_backend(
 
 fn backend_from_terraform_body(body: &AttributeMap) -> Option<StateBackend> {
     // `terraform { backend "s3" { ... } }` lowers under our loader as a
-    // synthetic attribute keyed by the labels. Our IR keeps nested blocks
-    // under a key prefixed with the block name. The simplest portable
-    // approach: scan for an attribute whose key starts with `"backend"`
-    // and whose value is an `Expression::Object`.
+    // single nested-block attribute keyed `"backend"`. The block labels
+    // live inside the resulting `Expression::Object` under the synthetic
+    // `__labels__` key (per spec defect S-006 / S-019). Pulling the first
+    // element of `__labels__` gives the backend kind; previously we
+    // hardcoded `"s3"` (F-022).
     for (k, v) in body {
-        if k.as_ref().starts_with("backend") {
-            let kind: Arc<str> = if let Some(rest) = k.as_ref().strip_prefix("backend.") {
-                Arc::from(rest)
-            } else {
-                Arc::from("s3")
-            };
-            if let Expression::Object(entries) = v {
-                let attrs: AttributeMap = entries
-                    .iter()
-                    .filter_map(|(kk, vv)| match kk {
-                        Expression::Literal(Value::Str(s)) => Some((Arc::clone(s), vv.clone())),
-                        _ => None,
-                    })
-                    .collect();
-                return Some(
-                    StateBackend::builder()
-                        .kind(kind)
-                        .attributes(attrs)
-                        .span(crate::ir::Span::synthetic())
-                        .build(),
-                );
+        if k.as_ref() == "backend"
+            && let Expression::Object(entries) = v
+        {
+            let mut attrs: AttributeMap = Vec::new();
+            let mut kind: Arc<str> = Arc::from("s3");
+            for (kk, vv) in entries {
+                let Expression::Literal(Value::Str(name)) = kk else {
+                    continue;
+                };
+                if name.as_ref() == "__labels__"
+                    && let Expression::Literal(Value::List(labels)) = vv
+                    && let Some(Value::Str(label)) = labels.first()
+                {
+                    kind = Arc::clone(label);
+                    continue;
+                }
+                attrs.push((Arc::clone(name), vv.clone()));
             }
+            return Some(
+                StateBackend::builder()
+                    .kind(kind)
+                    .attributes(attrs)
+                    .span(crate::ir::Span::synthetic())
+                    .build(),
+            );
         }
     }
     None
@@ -935,6 +989,7 @@ fn build_func_registry(
     memo: Arc<DashMap<Arc<Path>, Arc<ResolvedTerragrunt>>>,
     stack: Arc<std::sync::Mutex<Vec<Arc<Path>>>>,
     inflight: Arc<DashMap<Arc<Path>, ()>>,
+    registry_slot: Arc<OnceLock<Arc<FuncRegistry>>>,
     ctx: &TgContext,
     loader: HclEditLoader,
     loader_limits: LoaderLimits,
@@ -992,6 +1047,7 @@ fn build_func_registry(
             memo,
             stack,
             inflight,
+            registry_slot,
             loader,
             loader_limits,
             eval_limits,
@@ -1013,6 +1069,11 @@ struct ReadTerragruntConfigFn {
     memo: Arc<DashMap<Arc<Path>, Arc<ResolvedTerragrunt>>>,
     stack: Arc<std::sync::Mutex<Vec<Arc<Path>>>>,
     inflight: Arc<DashMap<Arc<Path>, ()>>,
+    /// Late-bound holder of the registry this function lives in. Populated
+    /// right after the registry is constructed (F-021). When we recurse to
+    /// reduce a parent's locals, we use the full TG registry so functions
+    /// like `find_in_parent_folders` and `get_repo_root` remain dispatchable.
+    registry_slot: Arc<OnceLock<Arc<FuncRegistry>>>,
     loader: HclEditLoader,
     loader_limits: LoaderLimits,
     eval_limits: EvalLimits,
@@ -1096,16 +1157,21 @@ impl HclFunc for ReadTerragruntConfigFn {
             .parse_bytes(&bytes, &canonical, &self.loader_limits);
         let parsed = parsed::project(&parsed_bytes, &canonical);
 
-        // Lightweight evaluator pass: literal locals → resolved map.
+        // Use the same TG registry this function lives in so transitive
+        // `read_terragrunt_config` / `find_in_parent_folders` / `get_env`
+        // calls inside the parent's locals dispatch correctly (F-021).
+        // The OnceLock is populated right after the resolver builds the
+        // registry; if it's somehow empty (shouldn't happen), fall back
+        // to the stdlib-only registry to keep the call best-effort.
+        let nested_funcs: Arc<FuncRegistry> = self
+            .registry_slot
+            .get()
+            .map_or_else(|| Arc::new(FuncRegistry::default_with_stdlib()), Arc::clone);
+
         let literal_map: Map = literal_map_for(&parsed.locals);
-        // Reduce non-literal locals against the literal subset.
         let resolved = evaluate_locals(
             &parsed.locals,
-            // Build a temporary registry without the recursive
-            // read_terragrunt_config to avoid re-entering (we already
-            // hold the inflight marker). Use a clean empty registry to
-            // keep the evaluation purely literal-driven.
-            &Arc::new(FuncRegistry::default_with_stdlib()),
+            &nested_funcs,
             &self.state,
             &self.workspace_root,
             &self.env_var_mode,
@@ -1116,7 +1182,7 @@ impl HclFunc for ReadTerragruntConfigFn {
             evaluate_inputs(
                 input_attrs,
                 &merged_locals,
-                &Arc::new(FuncRegistry::default_with_stdlib()),
+                &nested_funcs,
                 &self.state,
                 &self.workspace_root,
                 &self.env_var_mode,
