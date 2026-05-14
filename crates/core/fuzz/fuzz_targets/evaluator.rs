@@ -36,16 +36,16 @@ fuzz_target!(|data: &[u8]| {
 
     // Empty workspace root pin (tempdir-shaped path); sandbox helpers will
     // reject any file read attempt.
-    let ctx = EvalContext {
-        workspace_root: Arc::from(Path::new("/nonexistent-fuzz-root")),
-        environment: None,
-        env_vars: tfparser_core::eval::EnvVarMode::default(),
-        repo_vars: Vec::new(),
-        cascade_locals: Vec::new(),
-        funcs: Arc::new(FuncRegistry::default_with_stdlib()),
-        limits: tfparser_core::eval::EvalLimits::default(),
-    };
+    let ctx = EvalContext::new(
+        Arc::from(Path::new("/nonexistent-fuzz-root")),
+        None,
+        tfparser_core::eval::EnvVarMode::default(),
+        Vec::new(),
+        Vec::new(),
+        Arc::new(FuncRegistry::default_with_stdlib()),
+        tfparser_core::eval::EvalLimits::default(),
+    );
 
     // The evaluator must not panic; failures are diagnostics, not errors.
-    let _ = HclEvaluator.evaluate(&component, &ctx);
+    let _ = HclEvaluator::new().evaluate(&component, &ctx);
 });

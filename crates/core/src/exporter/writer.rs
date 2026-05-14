@@ -137,9 +137,36 @@ impl SecondaryTable {
 }
 
 impl CompressionOpt {
+    /// Construct a `Zstd(level)` with explicit validation against the codec's
+    /// 1..=22 range. Prefer this over the bare `Self::Zstd(level)` variant
+    /// when the level originates from user input — the bare variant cannot
+    /// reject out-of-range values until the writer constructs the
+    /// underlying [`ZstdLevel`], where the only signal would be a silent
+    /// fall-through. Spec 70 § Input Validation: reject, don't sanitize.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::ValidationError::Range`] when `level` is outside
+    /// the zstd-1..=22 range.
+    pub fn zstd(level: i32) -> Result<Self, crate::ValidationError> {
+        if !(1..=22).contains(&level) {
+            return Err(crate::ValidationError::Range {
+                field: "CompressionOpt::Zstd.level",
+                min: 1,
+                max: 22,
+                got: i64::from(level),
+            });
+        }
+        Ok(Self::Zstd(level))
+    }
+
     fn to_parquet(self) -> Compression {
         match self {
             Self::Uncompressed => Compression::UNCOMPRESSED,
+            // Range was checked at construction via `CompressionOpt::zstd`.
+            // The bare enum variant `Zstd(level)` is documented to require
+            // valid range; downgrade an unexpected level to the codec's
+            // default rather than panic (writer code is hot path).
             Self::Zstd(level) => Compression::ZSTD(ZstdLevel::try_new(level).unwrap_or_default()),
             Self::Snappy => Compression::SNAPPY,
         }

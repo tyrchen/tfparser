@@ -107,4 +107,18 @@ pub enum ValidationError {
         /// Rule identifier — short machine-readable token.
         rule: &'static str,
     },
+
+    /// The candidate falls outside an allowed numeric range. Use for
+    /// integer-shaped invariants — codec levels, percentages, port numbers.
+    #[error("`{field}` out of range [{min}, {max}]: got {got}")]
+    Range {
+        /// Name of the field being validated.
+        field: &'static str,
+        /// Inclusive minimum.
+        min: i64,
+        /// Inclusive maximum.
+        max: i64,
+        /// Observed value.
+        got: i64,
+    },
 }

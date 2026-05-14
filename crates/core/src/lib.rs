@@ -4,15 +4,17 @@
 //! that can be exported as Parquet. This crate exposes the **types and traits**
 //! the pipeline is built around. Implementations land progressively:
 //!
-//! | Phase | Module(s) gated | Status (Phase 4) |
-//! | ----- | --------------- | ---------------- |
-//! | 1 | [`ir`], [`diagnostic`], [`pipeline`], [`error`] | ✅ landed |
+//! | Phase | Module(s) gated | Status |
+//! | ----- | --------------- | ------ |
+//! | 1 | [`ir`], [`diagnostic`], [`error`] | ✅ landed |
 //! | 2 | [`discovery`], [`loader`] | ✅ landed |
 //! | 3 | [`exporter`], [`projection`] | ✅ landed |
-//! | 4 | [`eval`] | ✅ this phase |
-//! | 5 | [`graph`] | ✅ this phase |
-//! | 6 | [`terragrunt`] | ✅ this phase |
-//! | 7 | `provider` | not yet |
+//! | 4 | [`eval`] | ✅ landed |
+//! | 5 | [`graph`] | ✅ landed |
+//! | 6 | [`terragrunt`] | ✅ landed |
+//! | 7 | [`provider`] | ✅ landed |
+//! | 8 | [`graph`] edges + secondary tables in [`exporter`] | ✅ landed |
+//! | 9 | [`pipeline::DefaultPipeline`], hardening | ✅ landed |
 //!
 //! See `./specs/91-impl-plan.md` for the build-order rationale and
 //! `./specs/10-data-model.md` for the IR contract pinned in this crate.
@@ -59,7 +61,7 @@ pub use ir::{
     ProviderBlock, ProviderRef, Region, Resource, ResourceKind, SourceFile, Span, StateBackend,
     SymbolKind, Symbolic, TerragruntConfig, UnaryOp, Value, Variable, Workspace,
 };
-pub use pipeline::{Pipeline, PipelineOptions};
+pub use pipeline::{DefaultPipeline, Pipeline, PipelineOptions};
 pub use provider::{
     DefaultProviderResolver, ProfileEntry, ProfileMap, ProviderContext, ProviderError,
     ProviderResolver, SharedProfileMap, empty_profile_map, extract_account_id, load_aws_config,

@@ -376,6 +376,71 @@ future phase.
 | S-035 | P2 | `specs/15-resource-graph.md § 4` (`TerragruntDependency` edges) | Spec mentions `dependency.x.outputs.y` as the trigger; implementation reads `Component.terragrunt.dependencies` block list, never the symbolic-ref form. Clarify which surface is canonical. |
 | S-036 | P3 | `specs/10-data-model.md § 5.3` (`modules.parquet` columns) | Spec gives prose ("source form, resolution status, call count") but not column names/types. Pin the impl's columns: `module_id, source_raw, source_kind, canonical_path, call_count, resolved`. |
 
+## Phase 9 review — hardening + DefaultPipeline (2026-05-14)
+
+### Fixed in-phase
+
+| ID | Severity | Where | Fix |
+| -- | -------- | ----- | --- |
+| P-016 | P1 | `crates/core/src/exporter/writer.rs::CompressionOpt::to_parquet` | Added `CompressionOpt::zstd(level) -> Result<Self, ValidationError>` (range-validated at the boundary). The CLI's `--zstd-level` flag now routes through it; the bare enum variant is kept for `Default`-shaped contexts and falls back to the codec default if it ever sees an out-of-range value. New `ValidationError::Range` variant covers the general numeric-range case. |
+| P-020 | P2 | `crates/cli/src/main.rs::run_parse::command_line` | Implemented `redact_command_line` — flags whose name contains `token`/`secret`/`password` are rewritten to `<flag>=<redacted>` (inline form) or trigger `<redacted>` on the next argv slot (space-separated form). Total command line capped at 4 KiB with `floor_char_boundary` to avoid `String::truncate` panicking on multi-byte UTF-8. Pinned by `tests::test_should_redact_token_flag` + `test_should_redact_space_separated_secret_flag` + `test_should_truncate_at_utf8_boundary_without_panic` + `test_should_truncate_at_cap` + `test_should_detect_secret_flags` + `test_floor_char_boundary_clamps_at_string_end`. |
+| F-029 | P1 | `crates/cli/src/main.rs::redact_command_line` (review-pass finding) | `out.truncate(CAP_BYTES)` panicked on multi-byte UTF-8 input (`tfparser parse "你..."` would reach via process argv). Walks back to nearest char boundary now. Reviewer-cited; **fixed in-phase**. |
+| F-030 | P1 | `crates/cli/src/main.rs::redact_arg` (review-pass finding) | Space-separated form `--token sk-xxx` leaked the secret. Now `redact_arg` returns `(rendered, redact_next: bool)` and the caller replaces the next argv slot. Reviewer-cited; **fixed in-phase**. |
+| F-031 | P1 | `crates/cli/src/main.rs::map_exit_code` (review-pass finding) | `GraphError` was routed to exit code `8`, which `specs/50-cli.md § 4.3` reserves for `--fail-on-diagnostics`. Routed to `4` (loader-class limit) instead. Reviewer-cited; **fixed in-phase**. |
+| P-094 | P3 | `crates/core/src/exporter/secondary.rs::sorted_edges` | Retired the redundant `sorted_edges` helper; the writer borrows `ws.edges` directly with a `debug_assert!` invariant that pins the (from, to, kind) sort produced by `graph::edges::collect_edges_in_place`. |
+| P-095 | P3 | `crates/core/src/exporter/secondary.rs::write_modules_parquet` counts loop | Rewrote the double `source_key` + `entry`/`get`/`unwrap_or(0)` pattern to idiomatic `let entry = counts.entry(...).or_insert(0); *entry = entry.saturating_add(1);`. |
+| P-097 | P3 | `crates/cli/src/main.rs::run_verify` | Manifest read is now capped at 4 MiB via `Read::take(cap + 1)` (`read_capped` helper). Defence-in-depth — manifests are small in practice. |
+
+### CLI parity with the library
+
+| Concern | Resolution |
+| ------- | ---------- |
+| `tfparser parse` only emitted `resources.parquet` | New `DefaultPipeline` in `crates/core/src/pipeline.rs` wires every phase (discovery → loader → projection → terragrunt → evaluator → graph → provider). CLI delegates to it; default `--tables all` emits the three secondary tables alongside. |
+| `pipeline.rs` doc comments claimed Phase 5 would land a `DefaultPipeline` — never delivered | Closed in this phase. `lib.rs` phase-status table updated. |
+| `EvalContext` builders were spelled out in fuzz/test code via field-struct init that no longer compiles after `#[non_exhaustive]` | `crates/core/fuzz/fuzz_targets/evaluator.rs` migrated to `EvalContext::new(...)`. Other call sites already used the constructor. |
+
+### Bench harness (task 9.1–9.2)
+
+`crates/core/benches/pipeline.rs` ships five `criterion` benches —
+`discovery_large_monorepo`, `loader_large_monorepo`,
+`evaluator_large_monorepo`, `exporter_large_monorepo`,
+`parse_large_monorepo`. `make bench-save-baseline` /
+`make bench-vs-baseline` gate the 10 % regression budget. Initial
+numbers on Apple M-series: discovery 2.1 ms / loader 3.0 ms /
+evaluator 63 µs / exporter 30 ms / e2e 8 ms.
+
+### Quality gates
+
+- `cargo build` / `cargo test` (443 passed) / `cargo +nightly fmt --check` / `cargo clippy -D warnings` (including `--benches`) / `RUSTDOCFLAGS="-D warnings" cargo doc` / `cargo deny check`: all green.
+- `cargo publish -p tfparser-core --dry-run`: ✅ succeeds.
+- `cargo publish -p tfparser-cli --dry-run`: blocked by chicken/egg (requires `tfparser-core` to be on crates.io first); structurally resolved by publishing core first in a real release. The CLI's manifest now pins `tfparser-core` to a `version = "0.1.0"` so the registry resolution step has the input it needs.
+
+### Deferred to a future phase
+
+| ID | Severity | Where | Fix shape |
+| -- | -------- | ----- | --------- |
+| P-098 | P2 | `crates/core/src/exporter/writer.rs::EmittedRow` (revisit P-015) | The owned-`String` row materialisation still allocates ~14 strings per row. The bench shows the exporter as the e2e hotspot (~30 ms / 288 rows). Switch to a per-row `Cow<'a, str>` borrow or an iterator over the IR; rerun benches under `make bench-vs-baseline` to confirm. |
+| P-099 | P2 | task 9.4 (Arc<str> interner) | Resource types and attribute names already store as `Arc<str>` per-node but are not workspace-deduped. Adding an interner threaded through the loader would reduce peak RSS on huge workspaces. Deferred — the current `large-monorepo` doesn't surface the regression on its 280 rows. |
+| P-100 | P2 | task 9.5 (pooled Vec<u8> for attributes_json) | Spec 20 § 3.3 prescribes per-row JSON pooling as the only per-row allocation in the hot path. Pairs with P-098; bench the combined change. |
+| P-101 | P3 | task 9.6 (6 h overnight fuzz) | Fuzz harnesses compile (`cargo +nightly fuzz` clean). The actual 6 h × 3-harness overnight pass needs to run outside this dev cycle. |
+| P-102 | P2 | task 9.10 (CLI publish dry-run) | `tfparser-cli --dry-run` is blocked until `tfparser-core` is on crates.io. Document the publish order in the release runbook. |
+| P-103 | P2 | `crates/core/tests/dependency_graph_pipeline.rs` (real DuckDB) | The in-Rust 3-table join simulation stays; spinning up a Rust `duckdb` crate dependency for the parquet integration test would bring a ~50 MB native dep into dev-dependencies. Defer; DuckDB compatibility is already smoke-tested manually against every fixture (see CHANGELOG). |
+| P-104 | P2 | `crates/cli/src/main.rs::parse_kv` | `--var KEY=VALUE` has no length cap on key or value — violates CLAUDE.md § Input Validation ("length limits on every string"). Add an explicit byte cap (e.g. `KEY ≤ 64`, `VALUE ≤ 4 KiB`). Reviewer-cited. |
+| P-105 | P2 | `crates/cli/src/main.rs::ParseArgs` | `--var` / `--allow-env` are `Vec<String>` with no element-count cap. Bound the collections (e.g. 256 entries each). Reviewer-cited. |
+| P-106 | P2 | `crates/core/src/exporter/writer.rs::CompressionOpt::Zstd` variant | The bare enum variant `Zstd(level)` is publicly constructible and silently falls back to default level when out-of-range. Either make the field private (factory-only) or split `Zstd(ZstdLevelChecked)` newtype so the type system enforces the invariant. Reviewer-cited. |
+| P-107 | P3 | `crates/core/src/pipeline.rs:457-466` (`test_default_pipeline_smoke_run_on_single_component_fixture`) | Silent `return` when fixture is missing masks regressions in CI where the fixture got moved/renamed. Replace with `panic!("fixture missing at …")` or rely on `CARGO_MANIFEST_DIR` + a known-stable path. Reviewer-cited. |
+| P-108 | P3 | `crates/core/src/exporter/secondary.rs::write_dependencies_parquet` | Invariant on edge sort is `debug_assert!`-only. Release builds will silently emit unsorted parquet if a future graph-builder change breaks the order. Either keep a release-mode `assert!` or unit-test the post-condition. Reviewer-cited. |
+| P-109 | P3 | `crates/cli/src/main.rs::run_parse` | `--allow-env` populates `EvalContext`'s `EnvVarMode::Strict.allowed` *and* the Terragrunt allowlist, but only when `--env-mode strict`. In `passthrough`/`mock` mode, the values are silently dropped for eval and kept for Terragrunt. Unify or document. Reviewer-cited. |
+
+### Spec defects — surfaced to the user
+
+| ID | Severity | Where | Issue / fix |
+| -- | -------- | ----- | ----------- |
+| S-037 | P2 | `specs/61-crates-and-features.md § 3.1` | Documents `Pipeline::run` returning a `Workspace` but does not list the `DefaultPipeline` entrypoint or its profile-map / region-default / strict knobs. Add a `§ 3.1.1` describing it. |
+| S-038 | P2 | `specs/50-cli.md § 2` | The CLI now exposes `--environment`, `--region`, `--profile-map`, `--aws-config`, `--var`, `--allow-env`, `--env-mode`, `--strict-providers`, `--compression`, `--zstd-level`, `--tables`. Spec lists none of them. Expand `§ 2.1` (parse). |
+| S-039 | P2 | `specs/91-impl-plan.md § 8` (Phase 5 exit) | Spec implied `DefaultPipeline` landed in Phase 5; it didn't (a oversight surfaced when wiring the CLI). Update the Phase 5 row to scope it to "graph builder only" and add a Phase 9.0 row covering DefaultPipeline. |
+| S-040 | P3 | `specs/71-performance-budgets.md § 7` | Spec lists four micro-benches but does not pin a path / function name. Phase 9 ships them as `crates/core/benches/pipeline.rs`; update the spec to cite the file and the bench-id naming convention. |
+
 ## How to use this file
 
 When a future phase starts, scan the table above for entries whose `file:line`

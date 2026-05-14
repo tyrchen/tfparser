@@ -68,7 +68,22 @@ pub(crate) fn write_dependencies_parquet(
 ) -> Result<(u64, u64), ExportError> {
     let schema = Arc::new(dependencies_schema());
 
-    let edges = sorted_edges(&ws.edges);
+    // `graph::edges::collect_edges_in_place` already sorts by
+    // `(from, to, kind)`. Borrowing directly avoids the redundant
+    // re-sort the original `sorted_edges` helper did (P-094 closed).
+    let edges: &[Edge] = ws.edges.as_slice();
+    debug_assert!(
+        edges.iter().zip(edges.iter().skip(1)).all(|(a, b)| (
+            a.from.as_str(),
+            a.to.as_str(),
+            a.kind.as_str()
+        ) <= (
+            b.from.as_str(),
+            b.to.as_str(),
+            b.kind.as_str()
+        )),
+        "graph::edges::collect_edges_in_place must produce sorted edges"
+    );
     let rows = edges.len();
 
     let mut from = StringBuilder::with_capacity(rows, rows * 48);
@@ -79,7 +94,7 @@ pub(crate) fn write_dependencies_parquet(
     let mut line = UInt32Builder::with_capacity(rows);
     let mut column = UInt32Builder::with_capacity(rows);
 
-    for e in &edges {
+    for e in edges {
         from.append_value(e.from.as_str());
         to.append_value(e.to.as_str());
         kind.append_value(e.kind.as_str());
@@ -108,17 +123,10 @@ pub(crate) fn write_dependencies_parquet(
     write_single_batch(final_path, &schema, &batch, compression, rows as u64)
 }
 
-fn sorted_edges(edges: &[Edge]) -> Vec<Edge> {
-    let mut v: Vec<Edge> = edges.to_vec();
-    v.sort_by(|a, b| {
-        (a.from.as_str(), a.to.as_str(), a.kind.as_str()).cmp(&(
-            b.from.as_str(),
-            b.to.as_str(),
-            b.kind.as_str(),
-        ))
-    });
-    v
-}
+// P-094 closed (2026-05-14): the workspace edges are already sorted by
+// `graph::edges::collect_edges_in_place`. The helper that re-sorted them
+// here is gone; the writer borrows `ws.edges` directly with a
+// `debug_assert!` invariant check (see `write_dependencies_parquet`).
 
 // ----------------------------------------------------------------------------
 // components.parquet
@@ -409,11 +417,8 @@ pub(crate) fn write_modules_parquet(
     let mut counts: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
     for c in &ws.components {
         for m in &c.modules {
-            *counts.entry(source_key(&m.source)).or_insert(0) = counts
-                .get(&source_key(&m.source))
-                .copied()
-                .unwrap_or(0)
-                .saturating_add(1);
+            let entry = counts.entry(source_key(&m.source)).or_insert(0);
+            *entry = entry.saturating_add(1);
         }
     }
     for module in &ws.modules {

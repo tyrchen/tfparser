@@ -4,6 +4,18 @@ build:
 test:
 	@cargo nextest run --all-features
 
+# Phase 9 bench harness (per [71-performance-budgets.md § 7]).
+bench:
+	@cargo bench -p tfparser-core --bench pipeline
+
+# Use `make bench-save-baseline` after a known-good commit; subsequent
+# `make bench-vs-baseline` compares against it (10 % regression budget).
+bench-save-baseline:
+	@cargo bench -p tfparser-core --bench pipeline -- --save-baseline main
+
+bench-vs-baseline:
+	@cargo bench -p tfparser-core --bench pipeline -- --baseline main
+
 # Per CLAUDE.md § Toolchain & Build — the gates every change must pass.
 ci:
 	@cargo build --workspace --all-targets
@@ -28,4 +40,4 @@ release:
 update-submodule:
 	@git submodule update --init --recursive --remote
 
-.PHONY: build test ci fuzz-hcl-loader release update-submodule
+.PHONY: build test ci fuzz-hcl-loader release update-submodule bench bench-save-baseline bench-vs-baseline
