@@ -126,6 +126,56 @@ future phase.
 
 ---
 
+## Phase 4 review (2026-05-13)
+
+### Spec defects — surfaced to the user
+
+| ID | Severity | Where | Issue / fix |
+| -- | -------- | ----- | ----------- |
+| S-010 | P1 | `specs/13-evaluator.md § 5` | The spec says "Already in `hcl-rs::eval` stdlib (we trust): format, formatlist, replace, regex, ...". `hcl-rs::eval` ships **no** built-in stdlib — every function must be `declare_func`'d into a `Context` manually. Phase 4 implements the subset that materially affects M1 (format, replace, lower, upper, trim, length, keys, values, merge, concat, lookup, contains, flatten, jsonencode/decode, base64encode/decode, tostring/tonumber/tobool/tolist/toset, sha256/sha512, formatdate, strcontains, get_env) and leaves the rest as `Expression::FuncCall` per § 5 closing rule. Update the spec to enumerate exactly which functions ship in v0.1 and to drop the "in hcl-rs::eval stdlib" wording. |
+| S-011 | P1 | `specs/13-evaluator.md § 4` | The example builds an `hcl::eval::Context<'static>` and calls `hc.declare_func(name, f.def.clone())` where `f.def` is `hcl::eval::FuncDef`. `FuncDef` takes a [`fn`-pointer](https://docs.rs/hcl-rs/latest/hcl/eval/type.Func.html) (`Func = fn(FuncArgs) -> Result<Value, String>`), not `Fn`, so stateful functions (`file()`, `get_env()`, Terragrunt helpers in Phase 6) cannot capture their workspace-root / env-mode / sandbox context through it. Phase 4 walks our own IR; `value_to_hcl` / `hcl_to_value` remain for the `hcl::Value` boundary that future Terragrunt funcs will use. Update spec § 4 to describe the actual walker-on-our-IR contract and pin the adapter's role. |
+| S-012 | P2 | `specs/13-evaluator.md § 5` (md5/sha1/bcrypt/uuid) | The spec lists `md5`, `sha1`, `bcrypt`, `uuid` as Terraform-only funcs to register in Phase 4. They are broken / non-deterministic / cryptographically dangerous per CLAUDE.md § Cryptography ("Never MD5/SHA-1/SHA-256/bcrypt for new code"). Phase 4 leaves them unimplemented (FuncCall stays unresolved). Pin in spec: "the parser MAY leave these as `__unresolved_func__` sentinels; resource attributes rarely call them directly". |
+| S-013 | P3 | `specs/13-evaluator.md § 2` | The spec types `EvalContext.repo_vars` and `cascade_locals` as `Map`. Phase 4 uses `crate::ir::Map = Vec<(Arc<str>, Value)>` (per spec 10 § 2.3). Add a one-line cross-reference so future readers don't think the `Map` here is `HashMap`. |
+
+### P2 — implementation hygiene (deferred)
+
+| ID | Severity | Where | Fix shape |
+| -- | -------- | ----- | --------- |
+| P-028 | P2 | `crates/core/src/eval/stdlib.rs::ReplaceFn` | Literal substring replace only. Terraform's `replace()` accepts `/regex/` shape in the `from` argument; Phase 4 silently ignores the regex form. Add detection-and-error or implement via `regex::RegexBuilder` with the size caps from 70-security § 3.4. |
+| P-029 | P2 | `crates/core/src/eval/files.rs::render_template` | Plain-identifier interpolation only. `${trimspace(x)}`, `${var.a.b}`, `${cond ? a : b}` all surface `FuncError::Other`. Phase 9 hardening could swap in `hcl::Template::from_str(...).evaluate(...)` for richer template support. Real-world `templatefile()` calls usually pass identifier-only refs, but the gap is documented. |
+| P-030 | P2 | `crates/core/src/eval/stdlib.rs::JsonencodeFn` | Object key order in the rendered JSON is *insertion order* of the source `Map`, not alphabetic. Spec 10 § 4 pins alphabetic ordering for `attributes_json`. Phase 3's renderer already alpha-sorts; the discrepancy here is benign (jsonencode results are typically wrapped in further attributes that the exporter alpha-sorts at the outer level), but a follow-up should align the two. |
+| P-031 | P2 | `crates/core/src/eval/component.rs::HclEvaluator::evaluate` | Locals reduction runs until convergence in `solve_locals`, but the surrounding evaluator does not re-reduce providers/resources after locals settle. If a provider attribute references a `local.X` that depends on another `local.Y`, the order is currently correct, but a deeper chain (`local.A` → `local.B` → provider expression that references `local.A`) might hold a partial. Add a two-pass evaluation or thread the resolved locals into the scope before any provider reduction (currently done at line ~145; verify chain depth). |
+
+### P3 — implementation hygiene (deferred)
+
+| ID | Severity | Where | Fix shape |
+| -- | -------- | ----- | --------- |
+| P-032 | P3 | `crates/core/src/eval/registry.rs::FuncRegistry::iter` | Public method exposes the underlying `HashMap`'s arbitrary iteration order. Add a `sorted_iter()` for diagnostic stability, or note in the rustdoc that the order is unspecified. |
+| P-033 | P3 | `crates/core/src/eval/tf_funcs.rs::FormatdateFn` | The token matcher matches `MM`/`DD`/`hh`/`mm`/`ss` greedily, so a literal string like `"checksum"` (containing `ss`) would inject the seconds. Terraform's formatdate has the same edge case but uses `'literal'` quoting to escape. Phase 4 ships without quoting support — document in rustdoc and add a deferred fix to consume `'…'` escapes. |
+| P-034 | P3 | `crates/core/src/eval/reduce.rs::reduce_for` | `for` comprehension reduction only fires when the *whole* collection has resolved. Partial reduction over a resolved-prefix of an unresolved tuple (rare but possible) stays unresolved. Acceptable for Phase 4; Phase 5 module expansion picks them up. |
+| P-035 | P3 | `crates/core/src/eval/stdlib.rs::render_format` | `%d` accepts `Value::Number` via `float_to_i64_truncated` (clamping). Terraform's `format("%d", 1.5)` is actually an error. Phase 4's behaviour is "best-effort"; document so a future reader does not "fix" it without checking the trade-off. |
+| P-036 | P3 | `crates/core/src/eval/component.rs::component_span_for_diag` | Cycle diagnostic uses the first file's path with a synthetic byte range. The cycle has many participants; consider attaching one diagnostic per participant or use the span of the first cyclic local. |
+| P-037 | P3 | `crates/core/src/eval/locals.rs::tarjan_first_cycle` | Recursive Tarjan blow-up on a pathological `locals` graph (deeper than the default thread stack). Phase 4 caps `locals` at the loader's `max_blocks_per_file` indirectly, but a fixture with 10 000 deeply-chained locals could panic on stack overflow. Convert to an iterative form or pin a per-call recursion-depth cap. |
+| P-038 | P3 | `crates/core/src/eval/files.rs::FilesetFn` | Sort uses `Vec::sort()` (lexicographic on `String`). Spec 10 § 4 references "ordered list" but does not pin the comparator. Verify against Terraform's actual ordering (filename byte order) and pin explicitly. |
+| P-039 | P3 | `crates/core/src/eval/files.rs::FilesetFn` | Walk uses `ignore::WalkBuilder::standard_filters(false).hidden(false)` — but no symlink policy. A symlink inside `dir` would resolve via the underlying walker; consider routing through `paths::canonicalize_inside(SymlinkPolicy::Reject)` per [70-security.md P5]. |
+| P-040 | P3 | `crates/core/src/eval/files.rs::TemplatefileFn` (template error) | When a template binding is missing, the call surfaces `FuncError::Other` with a free-form message. Define a dedicated `FuncError::TemplateRef` variant for downstream tooling to pivot on. |
+
+### Test coverage (low-risk gaps)
+
+| ID | Severity | Where | Fix shape |
+| -- | -------- | ----- | --------- |
+| T-003 | P3 | `crates/core/src/eval/reduce.rs` | No `proptest` block for monotonicity / determinism. `tests/evaluator_pipeline.rs` covers the property at the *integration* layer; a true property-based test would generate random `(Expression, Scope)` pairs and assert `reduce(reduce(e, s), s) == reduce(e, s)` (idempotence) and "adding a binding never removes a resolved value". |
+| T-004 | P3 | `crates/core/tests/evaluator_pipeline.rs` | No assertion on the **byte-stability** of `attributes_json` post-evaluator. The Phase 3 byte-deterministic test covers literal-only fixtures; a follow-up should re-run that test against a `var.region`-bound fixture. |
+| T-005 | P3 | `crates/core/fuzz/fuzz_targets/evaluator.rs` | Harness uses `default_with_stdlib()` against the loaded `Component`. The corpus is sourced from `hcl_loader` outputs, which means many inputs hit early termination in the loader. Adding an `Arbitrary` impl for our `Expression` IR would give the harness more reach. |
+
+### Out-of-phase (correctly deferred to later phases)
+
+- Bench harness for `parse_large_monorepo` per [71-performance-budgets.md] — Phase 9.
+- `Arc<str>` interner reuse inside the evaluator — Phase 9.
+- Variable type-expression interpretation (the `type = map(string)` mini-language) — only impacts diagnostic precision, not row population. Phase 9.
+
+---
+
 ## How to use this file
 
 When a future phase starts, scan the table above for entries whose `file:line`

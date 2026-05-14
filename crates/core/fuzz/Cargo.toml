@@ -10,11 +10,19 @@ cargo-fuzz = true
 
 [dependencies]
 libfuzzer-sys = "0.4"
+arbitrary     = { version = "1", features = ["derive"] }
 tfparser-core = { path = ".." }
 
 [[bin]]
 name = "hcl_loader"
 path = "fuzz_targets/hcl_loader.rs"
+test = false
+doc  = false
+bench = false
+
+[[bin]]
+name = "evaluator"
+path = "fuzz_targets/evaluator.rs"
 test = false
 doc  = false
 bench = false

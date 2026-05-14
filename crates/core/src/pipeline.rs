@@ -9,44 +9,12 @@
 //!
 //! [61-crates-and-features.md § 3.1]: ../../specs/61-crates-and-features.md
 
-use std::{collections::BTreeSet, path::Path, sync::Arc};
+use std::{path::Path, sync::Arc};
 
 use serde::{Deserialize, Serialize};
 use typed_builder::TypedBuilder;
 
-use crate::{Result, ir::Workspace};
-
-/// How [`Pipeline::run`] should treat process environment variables when an
-/// HCL evaluator encounters `get_env(...)`. Mirrors the
-/// [`EvalContext`-side enum](../../specs/13-evaluator.md) — duplicated here
-/// to keep the pipeline-facing options struct free of evaluator types
-/// until Phase 4.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case", tag = "mode")]
-#[non_exhaustive]
-pub enum EnvVarMode {
-    /// Pass the full process environment to the evaluator. CLI prints a
-    /// warning at startup. Reserved for `--unsafe-env`.
-    Passthrough,
-    /// Only names in `allowed` are visible. Default.
-    ///
-    /// The allowlist is a `BTreeSet` (deduping, ordered) per
-    /// [13-evaluator.md § 2](../../specs/13-evaluator.md).
-    Strict {
-        /// Allowed env var names (e.g. `{"TF_VAR_environment", "AWS_REGION"}`).
-        allowed: BTreeSet<Arc<str>>,
-    },
-    /// `get_env` always returns the supplied default (or empty string).
-    Mock,
-}
-
-impl Default for EnvVarMode {
-    fn default() -> Self {
-        Self::Strict {
-            allowed: BTreeSet::new(),
-        }
-    }
-}
+use crate::{Result, eval::EnvVarMode, ir::Workspace};
 
 /// Options for [`Pipeline::run`].
 ///

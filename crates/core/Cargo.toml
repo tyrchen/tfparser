@@ -21,18 +21,19 @@ tracing       = { workspace = true }
 smallvec      = { workspace = true }
 typed-builder = { workspace = true }
 hcl-edit      = { workspace = true }
+hcl-rs        = { workspace = true }
 ignore        = { workspace = true }
 globset       = { workspace = true }
 regex         = { workspace = true }
 arrow         = { workspace = true }
 parquet       = { workspace = true }
 sha2          = { workspace = true }
+base64        = { workspace = true }
 ryu           = { workspace = true }
 jiff          = { workspace = true }
 
 [dev-dependencies]
 anyhow             = { workspace = true }
-hcl-rs             = { workspace = true }
 tempfile           = { workspace = true }
 tracing-subscriber = { workspace = true }
 rstest             = { workspace = true }

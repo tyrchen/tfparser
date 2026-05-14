@@ -4,12 +4,12 @@
 //! that can be exported as Parquet. This crate exposes the **types and traits**
 //! the pipeline is built around. Implementations land progressively:
 //!
-//! | Phase | Module(s) gated | Status (Phase 2) |
+//! | Phase | Module(s) gated | Status (Phase 4) |
 //! | ----- | --------------- | ---------------- |
 //! | 1 | [`ir`], [`diagnostic`], [`pipeline`], [`error`] | ✅ landed |
-//! | 2 | [`discovery`], [`loader`] | ✅ this phase |
-//! | 3 | `exporter` | not yet |
-//! | 4 | `eval` | not yet |
+//! | 2 | [`discovery`], [`loader`] | ✅ landed |
+//! | 3 | [`exporter`], [`projection`] | ✅ landed |
+//! | 4 | [`eval`] | ✅ this phase |
 //! | 5 | `graph` | not yet |
 //! | 6 | `terragrunt` | trait surface only |
 //! | 7 | `provider` | not yet |
@@ -32,6 +32,7 @@
 pub mod diagnostic;
 pub mod discovery;
 pub mod error;
+pub mod eval;
 pub mod exporter;
 pub mod ir;
 pub mod loader;
@@ -41,6 +42,10 @@ pub(crate) mod util;
 
 pub use diagnostic::{Diagnostic, LimitKind, Severity};
 pub use error::{Error, Result, ValidationError};
+pub use eval::{
+    EnvVarMode, EvalContext, EvalError, EvalLimits, EvaluatedComponent, Evaluator, FuncRegistry,
+    HclEvaluator,
+};
 pub use ir::{
     AccountId, Address, AssumeRole, AttributeMap, BinaryOp, BlockKind, Component, ComponentId,
     ComponentKind, DependencyBlock, Environment, Expression, FileExt, GenerateBlock, IncludePath,
