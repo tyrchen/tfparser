@@ -67,6 +67,10 @@ impl HclEvaluator {
 ///
 /// All collections are owned; the raw component is held behind an `Arc` so
 /// span lookups remain cheap (per [13-evaluator.md § 2]).
+///
+/// Construct via [`HclEvaluator::evaluate`] in production code, or via
+/// [`EvaluatedComponent::from_component`] in tests when you want a
+/// transparent wrapper around a hand-built [`Component`].
 #[derive(Clone, Debug)]
 #[non_exhaustive]
 pub struct EvaluatedComponent {
@@ -90,6 +94,28 @@ pub struct EvaluatedComponent {
     /// Per-evaluation diagnostics — appended to the workspace's diagnostics
     /// vector by the orchestrator (Phase 5).
     pub diagnostics: Vec<Diagnostic>,
+}
+
+impl EvaluatedComponent {
+    /// Build an `EvaluatedComponent` that mirrors the contents of `c`
+    /// **as-if** evaluation had been a no-op — every collection is cloned
+    /// straight out of the source component. Used by integration / graph
+    /// tests that want a synthetic `EvaluatedComponent` without spinning
+    /// up the full evaluator. Production code should call
+    /// [`HclEvaluator::evaluate`].
+    #[must_use]
+    pub fn from_component(c: Component) -> Self {
+        Self {
+            variables: c.variables.clone(),
+            locals: c.locals.clone(),
+            providers: c.providers.clone(),
+            resources: c.resources.clone(),
+            modules: c.modules.clone(),
+            outputs: c.outputs.clone(),
+            diagnostics: Vec::new(),
+            raw: Arc::new(c),
+        }
+    }
 }
 
 impl Evaluator for HclEvaluator {

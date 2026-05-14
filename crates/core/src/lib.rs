@@ -10,7 +10,7 @@
 //! | 2 | [`discovery`], [`loader`] | ✅ landed |
 //! | 3 | [`exporter`], [`projection`] | ✅ landed |
 //! | 4 | [`eval`] | ✅ this phase |
-//! | 5 | `graph` | not yet |
+//! | 5 | [`graph`] | ✅ this phase |
 //! | 6 | `terragrunt` | trait surface only |
 //! | 7 | `provider` | not yet |
 //!
@@ -34,6 +34,7 @@ pub mod discovery;
 pub mod error;
 pub mod eval;
 pub mod exporter;
+pub mod graph;
 pub mod ir;
 pub mod loader;
 pub mod pipeline;
@@ -45,6 +46,9 @@ pub use error::{Error, Result, ValidationError};
 pub use eval::{
     EnvVarMode, EvalContext, EvalError, EvalLimits, EvaluatedComponent, Evaluator, FuncRegistry,
     HclEvaluator,
+};
+pub use graph::{
+    DefaultGraphBuilder, ExternalModuleRef, GraphBuilder, GraphContext, GraphError, ModuleRegistry,
 };
 pub use ir::{
     AccountId, Address, AssumeRole, AttributeMap, BinaryOp, BlockKind, Component, ComponentId,
