@@ -230,6 +230,37 @@ resource "aws_s3_bucket" "b" {
 }
 
 #[test]
+fn test_should_resolve_for_list_comprehension_from_real_hcl() {
+    // Regression for F-007: the loader lowers a bare for-binder `x` as
+    // SymbolKind::Other. Phase 4's reducer must resolve it via the
+    // `Scope.binders` namespace, not by accident through `Scope.vars`.
+    let src = r#"
+locals {
+  doubled = [for x in [1, 2, 3] : x * 10]
+}
+"#;
+    let component = build_component(src);
+    let evald = HclEvaluator::new()
+        .evaluate(&component, &make_ctx(Path::new("/tmp/repo")))
+        .unwrap();
+    let doubled = evald
+        .locals
+        .iter()
+        .find(|l| l.name.as_ref() == "doubled")
+        .expect("doubled local");
+    assert_eq!(
+        doubled.value.as_literal(),
+        Some(&Value::List(vec![
+            Value::Int(10),
+            Value::Int(20),
+            Value::Int(30),
+        ])),
+        "for-comprehension must resolve from real HCL: got {:?}",
+        doubled.value
+    );
+}
+
+#[test]
 fn test_should_be_monotone_when_extra_var_binding_added() {
     // Monotonicity (spec 13 § 10): adding a binding never *removes* a
     // resolved value. Compare two runs of the same component, the second

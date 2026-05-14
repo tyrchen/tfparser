@@ -56,7 +56,7 @@ pub fn register(b: &mut FuncRegistryBuilder) {
     b.register("flatten", Arc::new(FlattenFn));
     b.register("tostring", Arc::new(TostringFn));
     b.register("tonumber", Arc::new(TonumberFn));
-    b.register("tobool", Arc::new(TobooLFn));
+    b.register("tobool", Arc::new(ToBoolFn));
     b.register("tolist", Arc::new(TolistFn));
     b.register("toset", Arc::new(TosetFn));
     b.register("jsonencode", Arc::new(JsonencodeFn));
@@ -621,8 +621,8 @@ impl HclFunc for TonumberFn {
 }
 
 #[derive(Debug)]
-struct TobooLFn;
-impl HclFunc for TobooLFn {
+struct ToBoolFn;
+impl HclFunc for ToBoolFn {
     fn call(&self, args: &[Value], _cx: &CallCx<'_>) -> Result<Value, FuncError> {
         let v = args.first().ok_or_else(|| FuncError::Arity {
             name: Arc::from("tobool"),
@@ -837,21 +837,10 @@ mod tests {
         registry::FuncRegistry,
     };
 
-    fn cx_with_limits(limits: &EvalLimits, env: &EnvVarMode) -> CallCx<'static> {
-        let _ = limits; // not used directly; placeholder for non-'static cells
-        let _ = env;
-        unreachable!("not used")
-    }
-
     fn call(name: &str, args: &[Value]) -> Result<Value, FuncError> {
         let limits = EvalLimits::default();
         let env = EnvVarMode::default();
-        let cx = CallCx {
-            workspace_root: Path::new("/tmp/repo"),
-            env_vars: &env,
-            limits: &limits,
-        };
-        let _ = cx_with_limits;
+        let cx = CallCx::new(Path::new("/tmp/repo"), &env, &limits);
         let mut b = FuncRegistry::builder();
         register(&mut b);
         let r = b.build();

@@ -44,6 +44,14 @@ pub struct Scope<'a> {
     pub vars: Map,
     /// `local.*` namespace, populated incrementally by the locals solver.
     pub locals: Map,
+    /// **For-comprehension binders** (the `x` / `key, value` names in
+    /// `[for x in ...]` / `{for key, value in ...}`).
+    ///
+    /// HCL's lowering classifies bare identifiers as
+    /// [`SymbolKind::Other`](crate::ir::SymbolKind::Other) — neither
+    /// `var.*` nor `local.*` — so they need a third namespace. Empty
+    /// outside `reduce_for`.
+    pub binders: Map,
     /// Workspace root for sandboxed file functions.
     pub workspace_root: &'a Path,
     /// Process-env policy for `get_env`.
@@ -59,7 +67,8 @@ pub struct Scope<'a> {
 
 impl<'a> Scope<'a> {
     /// Construct a new scope from explicit pieces. Used by the component
-    /// evaluator (`super::component`).
+    /// evaluator (`super::component`). `binders` defaults to empty —
+    /// only the for-comprehension reducer populates it.
     #[must_use]
     pub fn new(
         vars: Map,
@@ -73,6 +82,7 @@ impl<'a> Scope<'a> {
         Self {
             vars,
             locals,
+            binders: Map::new(),
             workspace_root,
             env_vars,
             limits,
@@ -89,6 +99,12 @@ impl<'a> Scope<'a> {
 
     fn lookup_local(&self, name: &str) -> Option<&Value> {
         self.locals
+            .iter()
+            .find_map(|(k, v)| if k.as_ref() == name { Some(v) } else { None })
+    }
+
+    fn lookup_binder(&self, name: &str) -> Option<&Value> {
+        self.binders
             .iter()
             .find_map(|(k, v)| if k.as_ref() == name { Some(v) } else { None })
     }
@@ -136,14 +152,23 @@ pub fn reduce_expression(expr: &Expression, scope: &Scope<'_>) -> Expression {
                 }
                 expr.clone()
             }
+            // For-comprehension binders are lowered as `SymbolKind::Other`
+            // (bare HCL identifiers). Resolve them against the `binders`
+            // namespace; if absent, leave unresolved. The same arm handles
+            // any other bare-identifier reference outside a for-body —
+            // those are syntactically malformed in Terraform but the
+            // lowerer doesn't reject them, so we stay best-effort here.
+            SymbolKind::Other => match scope.lookup_binder(sym.source.as_ref()) {
+                Some(v) => Expression::Literal(v.clone()),
+                None => expr.clone(),
+            },
             // Apply-time references the evaluator can never resolve.
             SymbolKind::Resource
             | SymbolKind::Data
             | SymbolKind::Module
             | SymbolKind::Path
             | SymbolKind::Iteration
-            | SymbolKind::TerragruntDependency
-            | SymbolKind::Other => expr.clone(),
+            | SymbolKind::TerragruntDependency => expr.clone(),
         },
 
         Expression::BinaryOp { op, lhs, rhs, span } => {
@@ -505,21 +530,25 @@ fn reduce_for(f: &ForExpr, collection: &Expression, scope: &Scope<'_>) -> Expres
     }
 
     for (k, v) in pairs {
-        let mut local_scope_vars = scope.vars.clone();
-        // Bind one or two iteration variables.
+        // For-binders go into a *separate* namespace from `var.*` because
+        // HCL lowers a bare `x` (inside `for x in ...`) as
+        // `SymbolKind::Other`, not `SymbolKind::Var`. The reducer's
+        // `SymbolKind::Other` arm consults `scope.binders`.
+        let mut inner_binders = scope.binders.clone();
         match f.binders.as_slice() {
             [single] => {
-                local_scope_vars.push((Arc::clone(single), v.clone()));
+                inner_binders.push((Arc::clone(single), v.clone()));
             }
             [key_name, value_name] => {
-                local_scope_vars.push((Arc::clone(key_name), k.clone()));
-                local_scope_vars.push((Arc::clone(value_name), v.clone()));
+                inner_binders.push((Arc::clone(key_name), k.clone()));
+                inner_binders.push((Arc::clone(value_name), v.clone()));
             }
             _ => return Expression::For(Box::new(f.clone())),
         }
         let inner_scope = Scope {
-            vars: local_scope_vars,
+            vars: scope.vars.clone(),
             locals: scope.locals.clone(),
+            binders: inner_binders,
             workspace_root: scope.workspace_root,
             env_vars: scope.env_vars,
             limits: scope.limits,
@@ -601,6 +630,7 @@ mod tests {
         Scope {
             vars,
             locals: Vec::new(),
+            binders: Vec::new(),
             workspace_root: Path::new("/tmp/repo"),
             env_vars: env,
             limits,
@@ -780,6 +810,19 @@ mod tests {
         assert!(matches!(out, Expression::FuncCall(_)));
     }
 
+    fn bare_ident(name: &str) -> Expression {
+        // The lowering classifies bare HCL identifiers (e.g. `v` inside
+        // `for v in ...`) as `SymbolKind::Other`. The reducer's `Other`
+        // arm resolves them against `Scope.binders`.
+        Expression::Unresolved(
+            Symbolic::builder()
+                .kind(SymbolKind::Other)
+                .source(Arc::<str>::from(name))
+                .span(span())
+                .build(),
+        )
+    }
+
     #[test]
     fn test_for_list_comprehension_resolves() {
         let env = EnvVarMode::default();
@@ -794,9 +837,13 @@ mod tests {
                 Value::Int(3),
             ]))),
             key: None,
+            // Production HCL lowers the bare binder reference as
+            // `SymbolKind::Other` (see F-007). This test pins the
+            // production shape — passing it confirms the reducer's
+            // `binders` namespace works end-to-end.
             value: Box::new(Expression::BinaryOp {
                 op: BinaryOp::Mul,
-                lhs: Box::new(var_x("var.v")),
+                lhs: Box::new(bare_ident("v")),
                 rhs: Box::new(Expression::Literal(Value::Int(10))),
                 span: span(),
             }),
@@ -811,6 +858,40 @@ mod tests {
                 Value::Int(10),
                 Value::Int(20),
                 Value::Int(30),
+            ]))
+        );
+    }
+
+    #[test]
+    fn test_for_map_comprehension_resolves() {
+        let env = EnvVarMode::default();
+        let limits = EvalLimits::default();
+        let funcs = FuncRegistry::default();
+        let scope = make_scope(Vec::new(), &funcs, &env, &limits);
+        // `{for k, v in {a=1, b=2}: k => v * 10}`
+        let f = ForExpr {
+            binders: vec![Arc::from("k"), Arc::from("v")],
+            collection: Box::new(Expression::Literal(Value::Map(vec![
+                (Arc::from("a"), Value::Int(1)),
+                (Arc::from("b"), Value::Int(2)),
+            ]))),
+            key: Some(Box::new(bare_ident("k"))),
+            value: Box::new(Expression::BinaryOp {
+                op: BinaryOp::Mul,
+                lhs: Box::new(bare_ident("v")),
+                rhs: Box::new(Expression::Literal(Value::Int(10))),
+                span: span(),
+            }),
+            cond: None,
+            object_form: true,
+            span: span(),
+        };
+        let out = reduce_expression(&Expression::For(Box::new(f)), &scope);
+        assert_eq!(
+            out,
+            Expression::Literal(Value::Map(vec![
+                (Arc::from("a"), Value::Int(10)),
+                (Arc::from("b"), Value::Int(20)),
             ]))
         );
     }

@@ -93,6 +93,17 @@ pub struct EvaluatedComponent {
 }
 
 impl Evaluator for HclEvaluator {
+    #[tracing::instrument(
+        skip(self, component, ctx),
+        fields(
+            component_id = ?component.id,
+            component_path = %component.path.display(),
+            // repo_vars / cascade_locals can carry secrets-shaped strings
+            // (`TF_VAR_*` from env) — record only counts, never values.
+            n_repo_vars = ctx.repo_vars.len(),
+            n_cascade_locals = ctx.cascade_locals.len(),
+        ),
+    )]
     fn evaluate(&self, component: &Component, ctx: &EvalContext) -> Result<EvaluatedComponent> {
         let mut diagnostics: Vec<Diagnostic> = Vec::new();
 

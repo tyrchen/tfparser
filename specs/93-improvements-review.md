@@ -176,6 +176,32 @@ future phase.
 
 ---
 
+## Phase 4 review — independent code review (2026-05-13)
+
+### Fixed in-phase
+
+| ID | Severity | Where | Fix |
+| -- | -------- | ----- | --- |
+| F-007 | P1 | `crates/core/src/eval/reduce.rs::reduce_for` | For-comprehension binders are lowered as `SymbolKind::Other`, not `SymbolKind::Var`. Added a separate `Scope.binders` namespace (kept distinct from `vars`/`locals`) and routed `SymbolKind::Other` lookup through it. Pinned by `reduce::tests::test_for_list_comprehension_resolves` (now uses the production `SymbolKind::Other` shape) + new `test_for_map_comprehension_resolves` + end-to-end `evaluator_pipeline::test_should_resolve_for_list_comprehension_from_real_hcl`. |
+| F-012 | P3 | `crates/core/src/eval/stdlib.rs` | Renamed `TobooLFn` → `ToBoolFn`. |
+| F-013 | P3 | `crates/core/src/eval/stdlib.rs` | Removed dead `cx_with_limits` test helper; replaced manual `CallCx { ... }` literal with `CallCx::new(...)`. |
+| F-018 | P3 | `crates/core/src/eval/component.rs` | Added `#[tracing::instrument(skip(self, component, ctx), fields(component_id, component_path, n_repo_vars, n_cascade_locals))]` to `HclEvaluator::evaluate`. `repo_vars` / `cascade_locals` are not logged by value — only counts. |
+
+### Deferred to a future phase
+
+| ID | Severity | Where | Fix shape |
+| -- | -------- | ----- | --------- |
+| F-008 | P2 | `crates/core/src/eval/reduce.rs::render_value_as_str` | `TemplateConcat` with a List/Map literal renders `"[1, 2, 3]"` — Terraform errors on `"${var.list}"`. Constrain the collapse to scalar parts only (`Str | Bool | Int | Number | Null`); keep the `TemplateConcat` shape otherwise. |
+| F-009 | P2 | `crates/core/src/eval/reduce.rs` (Object collapse) | The `Arc::from("")` / `Value::Null` fallback arms in the Object → `Value::Map` collapse are dead under the current guard but a footgun if the guard ever weakens. Replace with `unreachable!` annotated by the guard rationale, or refactor via `try_into`. |
+| F-010 | P2 | `crates/core/src/eval/files.rs::FilesetFn` walk-error path | `ignore::WalkBuilder` errors surface via `FuncError::Other` with the raw OS error rendered through `Display` — may leak absolute paths of symlink targets outside the workspace root. Redact to the relative path the caller supplied. |
+| F-011 | P2 | `crates/core/src/eval/component.rs::HclEvaluator::evaluate` | `Arc::new(component.clone())` clones the entire `Component` on every call. Spec 13 § 2 implied an `Arc<RawComponent>` share. Accept `Arc<Component>` (or return a shape that does not need the source). |
+| F-014 | P3 | `crates/core/src/eval/component.rs::component_span_for_diag` | Diagnostics anchor at the first file's path with a synthetic byte range — overlaps P-036. Merge / dedupe. |
+| F-015 | P3 | spec 13 § 5 (S-010 follow-up) | Append the explicit list of stdlib names still **not** registered by `default_with_stdlib`: `formatlist, regex, regexall, substr, coalesce, coalescelist, tomap, try, can, element, index, slice, zipmap, range, min, max, abs, ceil, floor, pow, signum, parseint, yamlencode, yamldecode, cidrhost, cidrnetmask, cidrsubnet, cidrsubnets`. Stays under the § 5 closing rule (FuncCall preserved). |
+| F-016 | P3 | `crates/core/src/eval/reduce.rs::to_f64` | `to_f64(Value::Int(i64::MAX))` widens with silent precision loss (`f64` cannot represent `i64::MAX` exactly). Document the corner case or compare via `i128` intermediate. |
+| F-017 | P3 | `crates/core/src/eval/reduce.rs::reduce_for` (list-iter key) | `i64::try_from(i).unwrap_or(i64::MAX)` for the for-loop key index has an unreachable fallback (`usize` can't exceed `i64::MAX` on 64-bit hosts). Replace with documented `as i64` or `expect("usize fits i64")`. |
+
+---
+
 ## How to use this file
 
 When a future phase starts, scan the table above for entries whose `file:line`
