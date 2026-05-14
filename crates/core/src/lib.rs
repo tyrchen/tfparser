@@ -32,9 +32,11 @@
 pub mod diagnostic;
 pub mod discovery;
 pub mod error;
+pub mod exporter;
 pub mod ir;
 pub mod loader;
 pub mod pipeline;
+pub mod projection;
 pub(crate) mod util;
 
 pub use diagnostic::{Diagnostic, LimitKind, Severity};

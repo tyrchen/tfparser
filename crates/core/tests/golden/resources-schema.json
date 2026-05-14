@@ -1,0 +1,41 @@
+{
+  "version": {
+    "major": 0,
+    "minor": 1
+  },
+  "columns": [
+    { "name": "workspace_root", "type": "Utf8", "nullable": false },
+    { "name": "component_path", "type": "Utf8", "nullable": false },
+    { "name": "module_path", "type": "Utf8", "nullable": false },
+    { "name": "address", "type": "Utf8", "nullable": false },
+    { "name": "kind", "type": "Utf8", "nullable": false },
+    { "name": "resource_type", "type": "Utf8", "nullable": false },
+    { "name": "resource_name", "type": "Utf8", "nullable": false },
+    { "name": "provider_local", "type": "Utf8", "nullable": false },
+    { "name": "provider_source", "type": "Utf8", "nullable": false },
+    { "name": "account_id", "type": "Utf8", "nullable": false },
+    { "name": "account_name", "type": "Utf8", "nullable": false },
+    { "name": "region", "type": "Utf8", "nullable": false },
+    { "name": "environment", "type": "Utf8", "nullable": false },
+    { "name": "count_expr", "type": "Utf8", "nullable": false },
+    { "name": "for_each_expr", "type": "Utf8", "nullable": false },
+    {
+      "name": "depends_on",
+      "type": "List<Utf8>",
+      "item_nullable": false,
+      "nullable": false
+    },
+    { "name": "attributes_json", "type": "Utf8", "nullable": false },
+    { "name": "state_account_id", "type": "Utf8", "nullable": false },
+    { "name": "state_region", "type": "Utf8", "nullable": false },
+    { "name": "file", "type": "Utf8", "nullable": false },
+    { "name": "line", "type": "UInt32", "nullable": false },
+    { "name": "column", "type": "UInt32", "nullable": false },
+    { "name": "parser_version", "type": "Utf8", "nullable": false },
+    {
+      "name": "parsed_at",
+      "type": "Timestamp(Millisecond, UTC)",
+      "nullable": false
+    }
+  ]
+}

@@ -57,6 +57,14 @@ parquet = { version = "58", default-features = false, features = [
   "snap",
 ] }
 
+# Phase 3 hashing + numeric rendering + time.
+sha2 = "0.11"
+ryu = "1"
+jiff = "0.2"
+
+# Phase 3 CLI surface.
+clap = { version = "4", features = ["derive", "env"] }
+
 # Small-value containers
 smallvec = { version = "1.15", features = ["serde", "const_generics"] }
 
@@ -72,9 +80,9 @@ tfparser-core = { path = "crates/core" }
 # Workspace-wide lint policy (CLAUDE.md § Safety & Security + § Code Style).
 # Crate Cargo.toml inherits via [lints] workspace = true.
 [workspace.lints.rust]
-unsafe_code                   = "forbid"
-rust_2024_compatibility       = { level = "warn", priority = -1 }
-missing_docs                  = "warn"
+unsafe_code = "forbid"
+rust_2024_compatibility = { level = "warn", priority = -1 }
+missing_docs = "warn"
 missing_debug_implementations = "warn"
 
 [workspace.lints.clippy]
