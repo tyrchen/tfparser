@@ -74,7 +74,9 @@ pub enum LimitKind {
 ///
 /// `code` is a stable, machine-readable identifier like `"TF1001"`; tooling
 /// uses it to allowlist / ignore specific diagnostics without matching the
-/// message string.
+/// message string. `limit_kind` is set on diagnostics emitted in response to
+/// a configured cap breach, so consumers can pivot on the structured kind
+/// rather than parsing the message.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, TypedBuilder)]
 #[non_exhaustive]
 #[serde(rename_all = "camelCase")]
@@ -92,6 +94,11 @@ pub struct Diagnostic {
     /// Optional fix-it / suggestion to surface in CLI output.
     #[builder(default)]
     pub suggestion: Option<Arc<str>>,
+    /// Set when this diagnostic is the result of a configured-cap breach
+    /// (`max_blocks_per_file`, `max_attr_depth`, etc.). Lets consumers
+    /// disambiguate without parsing the message.
+    #[builder(default)]
+    pub limit_kind: Option<LimitKind>,
 }
 
 impl Diagnostic {
@@ -108,6 +115,24 @@ impl Diagnostic {
             message: message.into(),
             span: None,
             suggestion: None,
+            limit_kind: None,
+        }
+    }
+
+    /// Construct a diagnostic for a configured-cap breach.
+    ///
+    /// The structured [`LimitKind`] is preserved as `self.limit_kind` so
+    /// downstream tooling can match on it directly. The `message` should
+    /// still spell out the observed/limit values for log readability.
+    #[must_use]
+    pub fn limit(kind: LimitKind, code: impl Into<Arc<str>>, message: impl Into<Arc<str>>) -> Self {
+        Self {
+            severity: Severity::Warn,
+            code: code.into(),
+            message: message.into(),
+            span: None,
+            suggestion: None,
+            limit_kind: Some(kind),
         }
     }
 
@@ -138,6 +163,13 @@ mod tests {
         assert_eq!(d.severity, Severity::Warn);
         assert_eq!(&*d.code, "TF1001");
         assert!(d.suggestion.is_some());
+    }
+
+    #[test]
+    fn test_should_carry_limit_kind_when_constructed_via_limit() {
+        let d = Diagnostic::limit(LimitKind::BlocksPerFile, "TF1200", "exceeded");
+        assert_eq!(d.severity, Severity::Warn);
+        assert_eq!(d.limit_kind, Some(LimitKind::BlocksPerFile));
     }
 
     #[test]

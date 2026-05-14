@@ -20,4 +20,4 @@ mod traits;
 pub use limits::{LoaderLimits, LoaderLimitsBuilder};
 pub use raw::{RawBlock, RawComponent};
 pub use source_map::{LineCol, LineIndex, SourceMap};
-pub use traits::{HclEditLoader, LoadContext, Loader, LoaderError};
+pub use traits::{HclEditLoader, LoadContext, Loader, ParseBytesResult};

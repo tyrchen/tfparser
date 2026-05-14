@@ -170,8 +170,8 @@ fn process_walk_entry(
     };
     let size = metadata.len();
     if size > opts.max_file_size_bytes {
-        state.diagnostics.push(Diag::new(
-            Severity::Warn,
+        state.diagnostics.push(Diag::limit(
+            LimitKind::FileSize,
             "TF1103",
             format!(
                 "file exceeds size limit and was skipped: {} ({size} > {})",

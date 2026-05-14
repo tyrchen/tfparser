@@ -7,12 +7,11 @@ use std::{
 };
 
 use hcl_edit::parser::parse_body;
-use thiserror::Error;
-use tracing::{instrument, warn};
+use tracing::instrument;
 
 use super::{LoaderLimits, RawBlock, RawComponent, SourceMap, lowering, source_map::LineIndex};
 use crate::{
-    Diagnostic, Result, Severity,
+    Diagnostic, LimitKind, Result, Severity,
     diagnostic::Diagnostic as Diag,
     discovery::{DirKind, DiscoveredDir},
     ir::{ComponentKind, FileExt},
@@ -91,8 +90,8 @@ impl HclEditLoader {
         let mut diagnostics: Vec<Diagnostic> = Vec::new();
 
         if bytes.len() > limits.max_file_bytes as usize {
-            diagnostics.push(Diag::new(
-                Severity::Warn,
+            diagnostics.push(Diag::limit(
+                LimitKind::FileSize,
                 "TF1201",
                 format!(
                     "file exceeds loader byte cap ({} > {}); skipped",
@@ -189,8 +188,8 @@ impl Loader for HclEditLoader {
             let bytes = match read_file(&abs, ctx.limits.max_file_bytes) {
                 Ok(b) => b,
                 Err(LoaderReadError::TooLarge { observed, limit }) => {
-                    raw.diagnostics.push(Diag::new(
-                        Severity::Warn,
+                    raw.diagnostics.push(Diag::limit(
+                        LimitKind::FileSize,
                         "TF1201",
                         format!(
                             "file exceeds loader byte cap ({observed} > {limit}); skipped: {}",
@@ -259,31 +258,6 @@ impl Loader for HclEditLoader {
 
         Ok(raw)
     }
-}
-
-/// Errors returned by [`HclEditLoader`] for the public diagnostics surface.
-#[derive(Debug, Error)]
-#[non_exhaustive]
-pub enum LoaderError {
-    /// File exceeded `LoaderLimits::max_file_bytes`.
-    #[error("file too large: {path} ({observed} > {limit})")]
-    FileTooLarge {
-        /// Path that was rejected.
-        path: PathBuf,
-        /// Observed byte length.
-        observed: u64,
-        /// Configured cap.
-        limit: u64,
-    },
-    /// I/O error.
-    #[error("i/o error reading {path}: {source}")]
-    Io {
-        /// Path that triggered the error.
-        path: PathBuf,
-        /// Underlying I/O error.
-        #[source]
-        source: io::Error,
-    },
 }
 
 enum LoaderReadError {

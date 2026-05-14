@@ -25,7 +25,7 @@ use hcl_edit::{
 
 use super::{LoaderLimits, RawBlock, source_map::LineIndex};
 use crate::{
-    Diagnostic, Severity,
+    Diagnostic,
     diagnostic::{Diagnostic as Diag, LimitKind},
     ir::{
         Address, AttributeMap, BinaryOp, BlockKind, Conditional, Expression, ForExpr, FuncCall,
@@ -127,8 +127,8 @@ impl Lowerer<'_> {
     }
 
     fn record_limit(&mut self, kind: LimitKind, observed: u64, limit: u64) {
-        self.diagnostics.push(Diag::new(
-            Severity::Warn,
+        self.diagnostics.push(Diag::limit(
+            kind,
             "TF1200",
             format!(
                 "loader limit ({kind:?}) exceeded: observed {observed} > {limit}; subtree \
@@ -1007,7 +1007,7 @@ mod tests {
             lowered
                 .diagnostics
                 .iter()
-                .any(|d| d.message.contains("AttributeDepth"))
+                .any(|d| d.limit_kind == Some(LimitKind::AttributeDepth))
         );
     }
 
@@ -1023,11 +1023,12 @@ resource "c" "z" {}
         let limits = LoaderLimits::builder().max_blocks_per_file(2_u32).build();
         let lowered = lower_body(&body, &path, &li, &limits, src.len());
         assert_eq!(lowered.blocks.len(), 2);
+        // Structured limit_kind, not just message-string.
         assert!(
             lowered
                 .diagnostics
                 .iter()
-                .any(|d| d.message.contains("BlocksPerFile"))
+                .any(|d| d.limit_kind == Some(LimitKind::BlocksPerFile))
         );
     }
 

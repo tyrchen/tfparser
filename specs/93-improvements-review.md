@@ -29,6 +29,24 @@ future phase.
 | S-005 | P3 | `specs/12-hcl-loader.md § 2` | The spec shows `LoadContext` with a `line_indexer: &LineIndexer` field. The implementation uses a per-file `LineIndex` built lazily on demand from `SourceMap` (no separate `LineIndexer` type). Reconcile by either documenting the SourceMap-builds-LineIndex pattern (chosen here) or adding the `LineIndexer` type. |
 | S-006 | P3 | `specs/12-hcl-loader.md § 2` | The spec's `RawBlock.body` is typed as `AttributeMap` (top-level only) with "nested blocks are nested AttributeMaps via `Value::Map`". The implementation lowers nested blocks under a synthetic key whose value is `Expression::Object(...)` (not necessarily a `Value::Map`, because nested attributes may carry unresolved expressions). Update spec to document the `Expression::Object` form and the `__labels__` synthetic key the implementation uses for labelled nested blocks. |
 
+### P2 — implementation hygiene (deferred)
+
+| ID | Severity | Where | Fix shape |
+| -- | -------- | ----- | --------- |
+| P-007 | P2 | `crates/core/src/util/paths.rs:170-191` | `check_no_symlink_ancestors` covers the leaf symlink but has no test for an *intermediate* symlink in the chain. Add `test_should_reject_symlink_ancestor_with_reject_policy` (symlink dir under root, file beneath it). |
+| P-008 | P2 | `crates/core/src/discovery/fs_walker.rs::aggregate_signals` | `aggregate_signals` re-`std::fs::read`s every HCL file the walker already visited; spec § 3.3 wants discovery one-pass. Cache bytes during the walk and feed the classifier directly, or move probing into `process_walk_entry`. |
+| P-009 | P2 | `crates/core/src/discovery/classifier.rs::probe_set` | `RegexSet::new(...).unwrap_or_else(|_| RegexSet::empty())` silently degrades classification on a code-level regression. Add a `#[test]` asserting `probe_set().len() == 6` (or thread the `Result` to the public surface). |
+| P-010 | P2 | `crates/core/src/discovery/fs_walker.rs::find_root_hcl` | Probes only `root.hcl` and `terraform/root.hcl`. Real Terragrunt repos sometimes name it `terragrunt.hcl` at the workspace root or use a different sub-path. Widen the candidate list once Phase 6 (Terragrunt resolver) lands and a real cascade is observable. |
+
+### P3 — implementation hygiene (deferred)
+
+| ID | Severity | Where | Fix shape |
+| -- | -------- | ----- | --------- |
+| P-011 | P3 | `crates/core/src/loader/lowering.rs::attr_span` | Falls back to the synthetic `0..0` range when both `attr.span()` and `attr.value.span()` are `None`. Practically only reachable on hand-built ASTs (the parser always sets a span) but worth a `debug_assert!` to surface unintended use. |
+| P-012 | P3 | `crates/core/src/discovery/options.rs::default_*_globset` | Same `unwrap_or_else(|_| GlobSet::empty())` pattern as P-009; add a test that asserts both default globsets are non-empty. |
+| P-013 | P3 | `crates/core/src/discovery/fs_walker.rs::walk_workspace` | No per-collection cap on `BTreeMap`/`BTreeSet`; only `max_total_files` bounds the file vector. A workspace with millions of empty directories would balloon `seen_dirs`. Add a sibling `max_total_dirs` cap or surface `seen_dirs.len()` against `max_total_files`. |
+| P-014 | P3 | `crates/core/src/loader/traits.rs::file_ext_supports_block_kind` | Tfvars + Json catch-all is `false`; future canonical block kinds in `.tfvars` would be silently flagged. Convert to an explicit allowlist once the Phase 4 evaluator pins which `.tfvars`-allowable kinds are real. |
+
 ### P3 — implementation hygiene (deferred)
 
 | ID | Severity | Where | Fix shape |

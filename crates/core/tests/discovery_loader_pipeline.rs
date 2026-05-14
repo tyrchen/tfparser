@@ -23,9 +23,14 @@ use std::{
 
 use tfparser_core::{
     discovery::{Discoverer, DiscoveryOptions, FsDiscoverer},
-    ir::{BlockKind, Expression, Value},
-    loader::{HclEditLoader, LoadContext, Loader, LoaderLimits, SourceMap},
+    ir::{AttributeMap, BlockKind, Expression, Value},
+    loader::{HclEditLoader, LoadContext, Loader, LoaderLimits, RawBlock, SourceMap},
 };
+
+/// Structural proof of invariant I-LOAD-2: `RawBlock.body` is exactly an
+/// [`AttributeMap`] (`Vec<(Arc<str>, Expression)>`), so by construction it
+/// cannot carry an `hcl_edit` type. Compile-time assertion.
+const _ASSERT_BODY_IS_ATTRIBUTE_MAP: fn(&RawBlock) -> &AttributeMap = |b| &b.body;
 
 fn workspace_root() -> PathBuf {
     let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -90,10 +95,11 @@ fn test_should_load_single_component_fixture_blocks() {
 
 #[test]
 fn test_iload2_lowered_body_contains_no_hcl_edit_types() {
-    // Invariant I-LOAD-2 is structural — `RawBlock.body` is a Vec of our IR
-    // types. We can't look for "no `hcl_edit` types" via reflection, but we
-    // can serialise to JSON and assert the round-trip preserves shape, plus
-    // verify there's no leaking `Decor` / `Spanned` field name in the JSON.
+    // The compile-time `_ASSERT_BODY_IS_ATTRIBUTE_MAP` constant above is the
+    // load-bearing proof of I-LOAD-2 — if `RawBlock.body` ever stops being an
+    // `AttributeMap`, that line stops compiling. The runtime sweep below is
+    // belt-and-braces: it serialises every lowered block through serde_json
+    // and asserts no `hcl_edit`-internal type names leak into the output.
     let root = fixture("single-component");
     let discovered = FsDiscoverer
         .discover(&root, &DiscoveryOptions::defaults())
