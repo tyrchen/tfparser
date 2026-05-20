@@ -10,42 +10,42 @@ Targets are wall-clock on the **reference machine**: Apple M3 Pro (12-core, 36 G
 
 ## 2. End-to-end target
 
-| Surface | Wall-clock | Note |
-| ------- | ---------- | ---- |
-| `tfparser parse <ref>` (single env) | **≤ 5 s** | Includes Parquet write. Goal G2 from [00-prd.md](./00-prd.md). |
-| `tfparser parse <ref> --all-environments` (3 envs) | **≤ 12 s** | Three full runs share discovery + loader caches via `Arc`. |
-| `tfparser inspect <ref>` | **≤ 4 s** | Skips Parquet, so saves the export budget. |
-| Peak RSS | **≤ 1.5 GiB** | Hard ceiling — fails CI if exceeded. |
+| Surface                                            | Wall-clock    | Note                                                           |
+| -------------------------------------------------- | ------------- | -------------------------------------------------------------- |
+| `tfparser parse <ref>` (single env)                | **≤ 5 s**     | Includes Parquet write. Goal G2 from [00-prd.md](./00-prd.md). |
+| `tfparser parse <ref> --all-environments` (3 envs) | **≤ 12 s**    | Three full runs share discovery + loader caches via `Arc`.     |
+| `tfparser inspect <ref>`                           | **≤ 4 s**     | Skips Parquet, so saves the export budget.                     |
+| Peak RSS                                           | **≤ 1.5 GiB** | Hard ceiling — fails CI if exceeded.                           |
 
 The 5-second number is the load-bearing one. Slower than that and the tool stops being usable in pre-PR loops.
 
 ## 3. Per-phase ladder (reference-scale)
 
-| # | Phase | Median | P99 | Notes |
-| - | ----- | ------ | --- | ----- |
-| 1 | Discovery (walk + classify) | 220 ms | 350 ms | I/O bound, 8 threads via `ignore::WalkBuilder`. |
-| 2 | HCL load + lower | 1.0 s  | 1.5 s | `rayon` over components, `hcl-edit` parse + AST lowering. |
-| 3 | Terragrunt resolve | 200 ms | 350 ms | Memoised across components. |
-| 4 | Evaluator (vars/locals fixpoint) | 1.1 s  | 1.7 s | Locals worklist; per-component context. |
-| 5 | Graph build (module expand + deps) | 300 ms | 450 ms | Bulk Arc clones, address rewrites. |
-| 6 | Provider resolution | 100 ms | 150 ms | Hash lookups; per-resource. |
-| 7 | Parquet export (resources only) | 600 ms | 800 ms | Zstd-3 dominates. |
-| 8 | Manifest write + fsync | 50 ms  | 100 ms | Atomic rename. |
-| **Total** | **≈ 3.6 s** | **≈ 5.4 s** | Allows headroom under the 5 s wall-clock target. |
+| #         | Phase                              | Median      | P99                                              | Notes                                                     |
+| --------- | ---------------------------------- | ----------- | ------------------------------------------------ | --------------------------------------------------------- |
+| 1         | Discovery (walk + classify)        | 220 ms      | 350 ms                                           | I/O bound, 8 threads via `ignore::WalkBuilder`.           |
+| 2         | HCL load + lower                   | 1.0 s       | 1.5 s                                            | `rayon` over components, `hcl-edit` parse + AST lowering. |
+| 3         | Terragrunt resolve                 | 200 ms      | 350 ms                                           | Memoised across components.                               |
+| 4         | Evaluator (vars/locals fixpoint)   | 1.1 s       | 1.7 s                                            | Locals worklist; per-component context.                   |
+| 5         | Graph build (module expand + deps) | 300 ms      | 450 ms                                           | Bulk Arc clones, address rewrites.                        |
+| 6         | Provider resolution                | 100 ms      | 150 ms                                           | Hash lookups; per-resource.                               |
+| 7         | Parquet export (resources only)    | 600 ms      | 800 ms                                           | Zstd-3 dominates.                                         |
+| 8         | Manifest write + fsync             | 50 ms       | 100 ms                                           | Atomic rename.                                            |
+| **Total** | **≈ 3.6 s**                        | **≈ 5.4 s** | Allows headroom under the 5 s wall-clock target. |
 
 ## 4. Memory budget
 
 Workspace IR for reference-scale shape (~40 k resources post-expansion):
 
-| Section | Bytes | Note |
-| ------- | ----- | ---- |
-| Source strings (raw `.tf` contents) | ~60 MiB | `Arc<str>` per file; retained for span display. |
-| Lowered AST (`AttributeMap` trees) | ~250 MiB | Per-resource. Dominant. |
-| Spans + `LineIndex`es | ~40 MiB | `Vec<u32>` per file. |
-| Workspace structure (Vecs, ids) | ~10 MiB | |
-| Parquet builders (peak during write) | ~80 MiB | All columns pre-sized to row count. |
-| `attributes_json` (post-render, transient) | ~120 MiB peak | Released as written. |
-| **Total peak** | **≤ 600 MiB** | Comfortable under the 1.5 GiB ceiling. |
+| Section                                    | Bytes         | Note                                            |
+| ------------------------------------------ | ------------- | ----------------------------------------------- |
+| Source strings (raw `.tf` contents)        | ~60 MiB       | `Arc<str>` per file; retained for span display. |
+| Lowered AST (`AttributeMap` trees)         | ~250 MiB      | Per-resource. Dominant.                         |
+| Spans + `LineIndex`es                      | ~40 MiB       | `Vec<u32>` per file.                            |
+| Workspace structure (Vecs, ids)            | ~10 MiB       |                                                 |
+| Parquet builders (peak during write)       | ~80 MiB       | All columns pre-sized to row count.             |
+| `attributes_json` (post-render, transient) | ~120 MiB peak | Released as written.                            |
+| **Total peak**                             | **≤ 600 MiB** | Comfortable under the 1.5 GiB ceiling.          |
 
 If the lowered AST blows up beyond projections, the worklist mitigation is **eviction**: after the evaluator finishes a component and the exporter takes its rows, drop the source string and the AST. M0 keeps everything resident for simplicity.
 
@@ -61,7 +61,7 @@ Allowed regression: any change with a `perf-allow-X-%` label on the PR descripti
 
 ## 6. Profiling stack
 
-- **CPU**: `cargo flamegraph -p tfparser-cli --bench parse_large_monorepo` for release-mode flame graphs.
+- **CPU**: `cargo flamegraph -p tfparser --bench parse_large_monorepo` for release-mode flame graphs.
 - **Memory**: `samply` (macOS/linux) or `bytehound`. Track `Arc<str>` interner hit rate via a `tracing` counter.
 - **Allocation hotness**: a debug-only feature `--features=alloc-stats` swaps the global allocator to `dhat::DhatAlloc` and dumps `dhat-heap.json` on exit.
 

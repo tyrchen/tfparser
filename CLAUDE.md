@@ -2,6 +2,13 @@
 
 IMPORTANT: Never enter plan mode automatically!!! Never enter plan mode automatically!!!
 
+## Agent Compatibility
+
+This file is the canonical project contract for Claude and Codex. Codex also
+has a repository entry point at `AGENTS.md` and project-local skills under
+`.codex/skills/`. Keep Claude and Codex guidance behaviorally aligned when
+updating agent instructions.
+
 ## Core Principles
 
 ### Code Quality

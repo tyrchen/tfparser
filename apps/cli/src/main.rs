@@ -186,7 +186,7 @@ fn run(cli: &Cli) -> Result<()> {
         Command::Parse(args) => run_parse(args),
         Command::Schema => run_schema(),
         Command::Version => {
-            tracing::info!(version = env!("CARGO_PKG_VERSION"), "tfparser-cli version");
+            tracing::info!(version = env!("CARGO_PKG_VERSION"), "tfparser version");
             std::io::Write::write_all(
                 &mut std::io::stdout(),
                 format!("tfparser {}\n", env!("CARGO_PKG_VERSION")).as_bytes(),

@@ -15,7 +15,7 @@
 cargo install --path apps/cli --locked
 
 # 发布后
-cargo install tfparser-cli
+cargo install tfparser
 ```
 
 确认安装成功：
@@ -96,11 +96,11 @@ tfparser parse ./repo \
 默认情况下 env-var 沙箱是 **strict**：除非用 `--allow-env FOO` 显式放行，
 否则 `get_env("FOO")` 返回 Unresolved。用 `--env-mode` 切换策略：
 
-| 模式 | 行为 |
-| ---- | ---- |
-| `strict`（默认） | 未放行的 env 名返回 Unresolved。 |
-| `passthrough` | 读取真实进程环境，适合 `TF_VAR_*` 的工作流；环境值可能写入 `attributes_json`，推荐优先使用 strict + 放行列表。 |
-| `mock` | `get_env` 始终返回调用方默认值（或 `""`），完全可重现。 |
+| 模式             | 行为                                                                                                           |
+| ---------------- | -------------------------------------------------------------------------------------------------------------- |
+| `strict`（默认） | 未放行的 env 名返回 Unresolved。                                                                               |
+| `passthrough`    | 读取真实进程环境，适合 `TF_VAR_*` 的工作流；环境值可能写入 `attributes_json`，推荐优先使用 strict + 放行列表。 |
+| `mock`           | `get_env` 始终返回调用方默认值（或 `""`），完全可重现。                                                        |
 
 ## 5. AWS profile / 账号解析
 
@@ -145,16 +145,16 @@ tfparser verify --manifest ./out/workspace.manifest.json
 
 参见 [`specs/50-cli.md § 4.3`](../specs/50-cli.md)：
 
-| 退出码 | 类别 |
-| ----- | ---- |
-| 0 | 成功 |
-| 2 | 输入校验错误（flag 值非法） |
-| 3 | I/O |
-| 4 | 资源限制 / 图构建 |
-| 5 | Terragrunt resolver |
-| 6 | provider resolver |
-| 7 | 导出器 |
-| 1 | 其他错误 |
+| 退出码 | 类别                        |
+| ------ | --------------------------- |
+| 0      | 成功                        |
+| 2      | 输入校验错误（flag 值非法） |
+| 3      | I/O                         |
+| 4      | 资源限制 / 图构建           |
+| 5      | Terragrunt resolver         |
+| 6      | provider resolver           |
+| 7      | 导出器                      |
+| 1      | 其他错误                    |
 
 ## 9. 在 Rust 里调用
 

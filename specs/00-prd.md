@@ -39,14 +39,14 @@ The product is **read-only**, **hermetic** (no network, no AWS creds, no `terraf
 
 ## 3. Goals
 
-| #  | Goal | Measure |
-| -- | ---- | ------- |
-| G1 | Parse a real ~5k-file TF+Terragrunt repo end-to-end in a single command. | `tfparser parse <repo>` exits 0 on the reference-scale fixture (see [72-testing-strategy.md § Fixtures](./72-testing-strategy.md)). |
-| G2 | Be fast enough to run in CI per pull request. | < 5 s wall-clock on a reference-scale repo (~5 k files / ~320 k LOC) on an M-class laptop (10-core), excluding I/O for the output file. |
-| G3 | Produce a Parquet file consumable by DuckDB, Polars, Athena, and ClickHouse without translation. | Round-trip: `duckdb -c "SELECT * FROM 'workspace.parquet' LIMIT 5"` works on the artifact. |
-| G4 | Resolve `account_id`, `region`, `environment` per resource when source data permits. | ≥ 95 % of `aws_*` resources in the reference-scale fixture have a non-empty `account_id` once a profile map is supplied. |
-| G5 | Degrade gracefully on unresolved values; never crash on malformed input from a real repo. | Fuzz harness over `corpus/**` runs 1M iterations without a panic; partial parses still emit Parquet for the resolved subset. |
-| G6 | Be embeddable: every CLI capability is exposed as a library API. | `tfparser-core` is `#![forbid(unsafe_code)]`, has rustdoc on every public item, and is the only thing the CLI depends on. |
+| #   | Goal                                                                                             | Measure                                                                                                                                 |
+| --- | ------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------- |
+| G1  | Parse a real ~5k-file TF+Terragrunt repo end-to-end in a single command.                         | `tfparser parse <repo>` exits 0 on the reference-scale fixture (see [72-testing-strategy.md § Fixtures](./72-testing-strategy.md)).     |
+| G2  | Be fast enough to run in CI per pull request.                                                    | < 5 s wall-clock on a reference-scale repo (~5 k files / ~320 k LOC) on an M-class laptop (10-core), excluding I/O for the output file. |
+| G3  | Produce a Parquet file consumable by DuckDB, Polars, Athena, and ClickHouse without translation. | Round-trip: `duckdb -c "SELECT * FROM 'workspace.parquet' LIMIT 5"` works on the artifact.                                              |
+| G4  | Resolve `account_id`, `region`, `environment` per resource when source data permits.             | ≥ 95 % of `aws_*` resources in the reference-scale fixture have a non-empty `account_id` once a profile map is supplied.                |
+| G5  | Degrade gracefully on unresolved values; never crash on malformed input from a real repo.        | Fuzz harness over `corpus/**` runs 1M iterations without a panic; partial parses still emit Parquet for the resolved subset.            |
+| G6  | Be embeddable: every CLI capability is exposed as a library API.                                 | `tfparser-core` is `#![forbid(unsafe_code)]`, has rustdoc on every public item, and is the only thing the CLI depends on.               |
 
 ## 4. Non-goals
 
@@ -60,13 +60,13 @@ The product is **read-only**, **hermetic** (no network, no AWS creds, no `terraf
 
 ## 5. Users
 
-| Persona | Job to be done | Reach for tfparser when… |
-| ------- | -------------- | ------------------------ |
-| **Infra engineer** | Audits / migrations / capacity reviews. | They need a structured inventory of the whole repo *now*, not after `terraform init` finishes 247 times. |
-| **Security engineer** | Inventories IAM roles, S3 buckets, KMS keys per account. | A blanket "list every `aws_iam_policy` with `Action = "*"`" question lands in their queue. |
-| **Platform team / data eng** | Builds dashboards over infra (cost attribution, sprawl). | They want a daily Parquet drop in S3 → Athena, no per-component state access. |
-| **Onboarding engineer** | Reads the repo to learn its topology. | They want a visual map: "what does `live-site/ads-pacer` actually touch?" |
-| **Anti-persona: deploy engineer** | Cares about *will this apply succeed?* | Use Terraform/Terragrunt directly — tfparser does not predict apply behaviour. |
+| Persona                           | Job to be done                                           | Reach for tfparser when…                                                                                 |
+| --------------------------------- | -------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| **Infra engineer**                | Audits / migrations / capacity reviews.                  | They need a structured inventory of the whole repo *now*, not after `terraform init` finishes 247 times. |
+| **Security engineer**             | Inventories IAM roles, S3 buckets, KMS keys per account. | A blanket "list every `aws_iam_policy` with `Action = "*"`" question lands in their queue.               |
+| **Platform team / data eng**      | Builds dashboards over infra (cost attribution, sprawl). | They want a daily Parquet drop in S3 → Athena, no per-component state access.                            |
+| **Onboarding engineer**           | Reads the repo to learn its topology.                    | They want a visual map: "what does `live-site/ads-pacer` actually touch?"                                |
+| **Anti-persona: deploy engineer** | Cares about *will this apply succeed?*                   | Use Terraform/Terragrunt directly — tfparser does not predict apply behaviour.                           |
 
 ## 6. Success metrics
 
@@ -78,18 +78,18 @@ Measured 90 days post-M3:
 
 ## 7. Naming conventions (binding)
 
-| Surface | Convention | Example |
-| ------- | ---------- | ------- |
-| Workspace crate | `tfparser` | (the workspace root) |
-| Core library crate | `tfparser-core` | published to crates.io |
-| CLI binary crate | `tfparser-cli` | `cargo install tfparser-cli` ships `tfparser` binary |
-| Public modules in core | `discovery`, `loader`, `eval`, `terragrunt`, `graph`, `provider`, `exporter` | one per component spec |
-| Errors | `tfparser_core::Error`, `Result<T> = std::result::Result<T, Error>` | `thiserror` enum, per [70-security.md](./70-security.md) |
-| Span type | `tfparser_core::Span { file: Arc<Path>, byte_range: Range<u32>, line: u32, col: u32 }` | exported, public |
-| Resource address | `tfparser_core::Address` — Terraform-style: `module.<name>.<type>.<name>[<index>]` | newtype over `Box<str>` |
-| Parquet output | `<out>/resources.parquet` for M0; later siblings `<out>/dependencies.parquet`, `<out>/components.parquet`, `<out>/modules.parquet` | flat files in one directory |
-| Public types use `Box<str>` / `Arc<str>` for short strings, not `String`. | | Per [CLAUDE.md § Performance](../CLAUDE.md) |
-| File ordering inside a crate | `use std::…;` then `use <external>::…;` then `use crate::…;` | Per [CLAUDE.md § Code Style](../CLAUDE.md) |
+| Surface                                                                   | Convention                                                                                                                         | Example                                                  |
+| ------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------- |
+| Workspace crate                                                           | `tfparser`                                                                                                                         | (the workspace root)                                     |
+| Core library crate                                                        | `tfparser-core`                                                                                                                    | published to crates.io                                   |
+| CLI binary crate                                                          | `tfparser`                                                                                                                         | `cargo install tfparser` ships `tfparser` binary         |
+| Public modules in core                                                    | `discovery`, `loader`, `eval`, `terragrunt`, `graph`, `provider`, `exporter`                                                       | one per component spec                                   |
+| Errors                                                                    | `tfparser_core::Error`, `Result<T> = std::result::Result<T, Error>`                                                                | `thiserror` enum, per [70-security.md](./70-security.md) |
+| Span type                                                                 | `tfparser_core::Span { file: Arc<Path>, byte_range: Range<u32>, line: u32, col: u32 }`                                             | exported, public                                         |
+| Resource address                                                          | `tfparser_core::Address` — Terraform-style: `module.<name>.<type>.<name>[<index>]`                                                 | newtype over `Box<str>`                                  |
+| Parquet output                                                            | `<out>/resources.parquet` for M0; later siblings `<out>/dependencies.parquet`, `<out>/components.parquet`, `<out>/modules.parquet` | flat files in one directory                              |
+| Public types use `Box<str>` / `Arc<str>` for short strings, not `String`. |                                                                                                                                    | Per [CLAUDE.md § Performance](../CLAUDE.md)              |
+| File ordering inside a crate                                              | `use std::…;` then `use <external>::…;` then `use crate::…;`                                                                       | Per [CLAUDE.md § Code Style](../CLAUDE.md)               |
 
 ## 8. Cross-references
 

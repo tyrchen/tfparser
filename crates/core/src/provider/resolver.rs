@@ -18,8 +18,6 @@ use std::{
     sync::Arc,
 };
 
-use regex::Regex;
-
 use crate::{
     Result,
     diagnostic::{Diagnostic, Severity},
@@ -354,18 +352,9 @@ fn fill_state_backend(
 /// Per spec § 4.1.
 #[must_use]
 pub fn extract_account_id(role_arn: &str) -> Option<AccountId> {
-    static RE: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
-    let re = RE.get_or_init(|| {
-        // SAFETY (clippy::unwrap_used): the literal compiles; the
-        // matching unit test pins it.
-        #[allow(clippy::unwrap_used)]
-        {
-            Regex::new(r"^arn:aws:iam::(\d{12}):role/").unwrap()
-        }
-    });
-    let caps = re.captures(role_arn)?;
-    let m = caps.get(1)?;
-    AccountId::new(m.as_str()).ok()
+    let rest = role_arn.strip_prefix("arn:aws:iam::")?;
+    let (account_id, _) = rest.split_once(":role/")?;
+    AccountId::new(account_id).ok()
 }
 
 fn literal_str(expr: &Expression) -> Option<Arc<str>> {

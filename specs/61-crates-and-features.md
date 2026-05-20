@@ -13,7 +13,7 @@ tfparser/
 ├── Cargo.toml                  (workspace root)
 ├── crates/
 │   ├── core/                   tfparser-core (library)
-│   └── cli/                    tfparser-cli (binary)
+│   └── cli/                    tfparser (binary)
 └── apps/
     └── server/                 (out of scope for M0 — empty skeleton allowed)
 ```
@@ -65,7 +65,7 @@ Public modules:
 - `tfparser_core::pipeline` — `Pipeline::run(opts)` convenience wrapper that wires the default impls together.
 - `tfparser_core::Error`, `tfparser_core::Result` — top-level error and result types.
 
-### 3.2 `tfparser-cli` (binary)
+### 3.2 `tfparser` (binary)
 
 The CLI in [50-cli.md](./50-cli.md). Single binary crate, depends on `tfparser-core` + `clap` + `tracing-subscriber` + `indicatif` + `anyhow`. `#![forbid(unsafe_code)]`.
 
@@ -176,12 +176,12 @@ Test code overrides locally via `#[allow(clippy::unwrap_used)]`.
 
 `tfparser-core`:
 
-| Feature | Default | Purpose |
-| ------- | ------- | ------- |
-| `parquet` | ✓ | Compile the Parquet exporter and `arrow`/`parquet` deps. Without it, the IR is library-only — useful for embedders who want their own emit format. |
-| `aws-config` | ✓ | Include the `~/.aws/config` profile-map loader. Off → only YAML loader available. |
-| `tracing-instrument` | ✓ | Compile-in `tracing::instrument` attributes. Off → strip for size/secrecy. |
-| `fuzz` | off | Wire up `arbitrary::Arbitrary` impls on IR types for fuzz harnesses. |
+| Feature              | Default | Purpose                                                                                                                                            |
+| -------------------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `parquet`            | ✓       | Compile the Parquet exporter and `arrow`/`parquet` deps. Without it, the IR is library-only — useful for embedders who want their own emit format. |
+| `aws-config`         | ✓       | Include the `~/.aws/config` profile-map loader. Off → only YAML loader available.                                                                  |
+| `tracing-instrument` | ✓       | Compile-in `tracing::instrument` attributes. Off → strip for size/secrecy.                                                                         |
+| `fuzz`               | off     | Wire up `arbitrary::Arbitrary` impls on IR types for fuzz harnesses.                                                                               |
 
 Avoid feature flags for "extra parsers" or "alternate evaluators" — those go behind traits, not features. Per CLAUDE.md § Dependencies, fewer features = less compile-matrix maintenance.
 

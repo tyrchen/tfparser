@@ -9,7 +9,7 @@
 ```text
 .
 ├── apps/
-│   └── cli/                tfparser-cli — 围绕 tfparser-core 的轻量 CLI
+│   └── cli/                tfparser — 围绕 tfparser-core 的轻量 CLI
 ├── crates/
 │   └── core/               tfparser-core — 库
 │       ├── examples/       端到端示例（可直接运行）
@@ -74,15 +74,15 @@ let (workspace, report) = parser.parse_and_export(&export)?;
 
 如果想替换某个阶段或单独运行某一步，下面的 trait 和默认实现可以直接用：
 
-| 用途 | 类型 / 函数 |
-| ---- | ----------- |
-| 在测试里整体替换 | impl [`Pipeline`](../crates/core/src/pipeline.rs) |
-| 单跑文件发现 | [`FsDiscoverer`](../crates/core/src/discovery) |
-| 单跑 HCL loader | [`HclEditLoader`](../crates/core/src/loader) |
-| 单跑求值器 | [`HclEvaluator`](../crates/core/src/eval) |
-| 单跑 Terragrunt resolver | [`FsTerragruntResolver`](../crates/core/src/terragrunt) |
-| 单跑 provider resolver | [`DefaultProviderResolver`](../crates/core/src/provider) |
-| 单跑 exporter | [`ParquetExporter`](../crates/core/src/exporter) |
+| 用途                     | 类型 / 函数                                              |
+| ------------------------ | -------------------------------------------------------- |
+| 在测试里整体替换         | impl [`Pipeline`](../crates/core/src/pipeline.rs)        |
+| 单跑文件发现             | [`FsDiscoverer`](../crates/core/src/discovery)           |
+| 单跑 HCL loader          | [`HclEditLoader`](../crates/core/src/loader)             |
+| 单跑求值器               | [`HclEvaluator`](../crates/core/src/eval)                |
+| 单跑 Terragrunt resolver | [`FsTerragruntResolver`](../crates/core/src/terragrunt)  |
+| 单跑 provider resolver   | [`DefaultProviderResolver`](../crates/core/src/provider) |
+| 单跑 exporter            | [`ParquetExporter`](../crates/core/src/exporter)         |
 
 每个 trait 都是 `Send + Sync` 且返回带具体错误类型的 `Result`，方便测试
 里塞 stub。
@@ -121,7 +121,7 @@ make fuzz-hcl-loader   # 10 分钟 fuzz 跑 loader
 
 ```sh
 cargo test -p tfparser-core              # 仅 core 单元/集成测试
-cargo test -p tfparser-cli               # CLI 集成测试
+cargo test -p tfparser               # CLI 集成测试
 cargo test -p tfparser-core --doc        # 文档测试
 cargo clippy --workspace --all-targets -- -D warnings
 cargo +nightly fmt --all
@@ -129,13 +129,13 @@ cargo +nightly fmt --all
 
 ## 5. 工作区 lint 不变量
 
-| Lint | 原因 |
-| ---- | ---- |
-| `unsafe_code = forbid` | 健全性合约；禁止 `unsafe`。 |
+| Lint                                                              | 原因                                                      |
+| ----------------------------------------------------------------- | --------------------------------------------------------- |
+| `unsafe_code = forbid`                                            | 健全性合约；禁止 `unsafe`。                               |
 | `unwrap_used` / `expect_used` / `panic` / `indexing_slicing` deny | 来自外部输入的可达 panic 一律禁止；测试可按模块 opt-out。 |
-| `print_stdout` / `print_stderr` deny | 除 CLI / 示例之外用 `tracing`。 |
-| `missing_docs` warn | 所有公共项都需要文档。 |
-| `pedantic` warn | 项目偏好；少量 `#[allow]` 必须在代码里附理由。 |
+| `print_stdout` / `print_stderr` deny                              | 除 CLI / 示例之外用 `tracing`。                           |
+| `missing_docs` warn                                               | 所有公共项都需要文档。                                    |
+| `pedantic` warn                                                   | 项目偏好；少量 `#[allow]` 必须在代码里附理由。            |
 
 完整说明见 [`./CLAUDE.md`](../CLAUDE.md)。
 

@@ -1,6 +1,6 @@
 # 50 — CLI (`tfparser`)
 
-Status: draft v1 · Owner: tfparser-cli · Depends on: [20-parquet-exporter.md](./20-parquet-exporter.md), [16-provider-resolver.md](./16-provider-resolver.md)
+Status: draft v1 · Owner: tfparser · Depends on: [20-parquet-exporter.md](./20-parquet-exporter.md), [16-provider-resolver.md](./16-provider-resolver.md)
 
 ## 1. Purpose
 
@@ -121,17 +121,17 @@ Use [`indicatif`](https://crates.io/crates/indicatif) for two progress bars: dis
 
 ### 4.3 Exit codes
 
-| Code | Meaning |
-| ---- | ------- |
-| 0 | Success (may have non-fatal diagnostics) |
-| 1 | Generic failure (parser bug, panic — should never happen) |
-| 2 | Configuration error (bad flags / config file / inputs) |
-| 3 | Discovery error (root missing / path escape) |
-| 4 | Loader error (limit exceeded, unrecoverable) |
-| 5 | Terragrunt error (cycle / path escape) |
-| 6 | Provider resolution error (only in `--strict-profiles`) |
-| 7 | Export error (disk full, output exists) |
-| 8 | Diagnostics present and `--fail-on-diagnostics` set |
+| Code | Meaning                                                   |
+| ---- | --------------------------------------------------------- |
+| 0    | Success (may have non-fatal diagnostics)                  |
+| 1    | Generic failure (parser bug, panic — should never happen) |
+| 2    | Configuration error (bad flags / config file / inputs)    |
+| 3    | Discovery error (root missing / path escape)              |
+| 4    | Loader error (limit exceeded, unrecoverable)              |
+| 5    | Terragrunt error (cycle / path escape)                    |
+| 6    | Provider resolution error (only in `--strict-profiles`)   |
+| 7    | Export error (disk full, output exists)                   |
+| 8    | Diagnostics present and `--fail-on-diagnostics` set       |
 
 This mapping is part of the user contract — captured here, mirrored in the CLI integration tests.
 

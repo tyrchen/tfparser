@@ -15,7 +15,7 @@ canonical Parquet tables (`resources`, `dependencies`, `components`,
 cargo install --path apps/cli --locked
 
 # once published
-cargo install tfparser-cli
+cargo install tfparser
 ```
 
 Verify:
@@ -98,11 +98,11 @@ By default the env-var sandbox is **strict** — `get_env("FOO")` returns
 `Unresolved` unless `--allow-env FOO` opts the name in. Switch the policy
 with `--env-mode`:
 
-| Mode | Behaviour |
-| ---- | --------- |
-| `strict` (default) | `get_env` returns Unresolved unless allowlisted. |
-| `passthrough` | `get_env` reads the actual process env. Useful for `TF_VAR_*`-shaped workflows; data may leak into `attributes_json`, so prefer the strict + allowlist combo. |
-| `mock` | `get_env` always returns the caller's default (or `""`). Reproducible / hermetic. |
+| Mode               | Behaviour                                                                                                                                                     |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `strict` (default) | `get_env` returns Unresolved unless allowlisted.                                                                                                              |
+| `passthrough`      | `get_env` reads the actual process env. Useful for `TF_VAR_*`-shaped workflows; data may leak into `attributes_json`, so prefer the strict + allowlist combo. |
+| `mock`             | `get_env` always returns the caller's default (or `""`). Reproducible / hermetic.                                                                             |
 
 ## 5. AWS profile / account resolution
 
@@ -148,16 +148,16 @@ manifest. Drift exits non-zero.
 
 Per [`specs/50-cli.md § 4.3`](../specs/50-cli.md):
 
-| Code | Class |
-| ---- | ----- |
-| 0 | success |
-| 2 | validation error (bad flag value) |
-| 3 | I/O |
-| 4 | resource limit / graph build |
-| 5 | Terragrunt resolver |
-| 6 | provider resolver |
-| 7 | exporter |
-| 1 | anything else |
+| Code | Class                             |
+| ---- | --------------------------------- |
+| 0    | success                           |
+| 2    | validation error (bad flag value) |
+| 3    | I/O                               |
+| 4    | resource limit / graph build      |
+| 5    | Terragrunt resolver               |
+| 6    | provider resolver                 |
+| 7    | exporter                          |
+| 1    | anything else                     |
 
 ## 9. Library use
 

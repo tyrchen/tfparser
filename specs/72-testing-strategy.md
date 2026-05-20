@@ -4,14 +4,14 @@ Status: draft v1 · Owner: tfparser-core
 
 ## 1. Pyramid
 
-| Layer | Count target | Where |
-| ----- | ------------ | ----- |
-| Unit tests | hundreds | inline `#[cfg(test)] mod tests` in each module |
-| Property tests | ~30 | `proptest` blocks, one per IR invariant family |
-| Snapshot tests | ~50 | `insta` snapshots, mostly under `crates/core/tests/snapshots/` |
-| Integration tests | ~30 | `crates/core/tests/*.rs` and `crates/cli/tests/*.rs` |
-| Fuzz harnesses | 3 | `crates/core/fuzz/` per [70-security.md § 6](./70-security.md#fuzzing) |
-| Benchmarks | ~8 | `crates/core/benches/` per [71-performance-budgets.md](./71-performance-budgets.md) |
+| Layer             | Count target | Where                                                                               |
+| ----------------- | ------------ | ----------------------------------------------------------------------------------- |
+| Unit tests        | hundreds     | inline `#[cfg(test)] mod tests` in each module                                      |
+| Property tests    | ~30          | `proptest` blocks, one per IR invariant family                                      |
+| Snapshot tests    | ~50          | `insta` snapshots, mostly under `crates/core/tests/snapshots/`                      |
+| Integration tests | ~30          | `crates/core/tests/*.rs` and `crates/cli/tests/*.rs`                                |
+| Fuzz harnesses    | 3            | `crates/core/fuzz/` per [70-security.md § 6](./70-security.md#fuzzing)              |
+| Benchmarks        | ~8           | `crates/core/benches/` per [71-performance-budgets.md](./71-performance-budgets.md) |
 
 ## 2. Naming
 
@@ -99,7 +99,7 @@ CI runs on `ubuntu-latest`, `macos-latest`, `windows-latest`. Path-handling test
 Use `cargo llvm-cov` in CI. Targets:
 
 - `tfparser-core`: ≥ 85 % line coverage, ≥ 80 % branch coverage.
-- `tfparser-cli`: ≥ 70 % (CLI glue is mostly arg parsing; less to cover deeply).
+- `tfparser`: ≥ 70 % (CLI glue is mostly arg parsing; less to cover deeply).
 
 Coverage is a hint, not a gate, per CLAUDE.md § Testing. Edge cases > raw %.
 

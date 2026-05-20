@@ -8,7 +8,7 @@ Built end-to-end in Rust 2024 — `#![forbid(unsafe_code)]`, no `unwrap`/`panic`
 reachable from external input, every input boundary validated.
 
 - 📦 [`tfparser-core`](./crates/core) — the library (`crates/`)
-- 🛠️ [`tfparser-cli`](./apps/cli) — the `tfparser` binary (`apps/`)
+- 🛠️ [`tfparser`](./apps/cli) — the `tfparser` binary (`apps/`)
 
 📖 Guides — also in 中文:
 - [User guide](./docs/user-guide.en.md) · [用户指南](./docs/user-guide.zh.md)
@@ -25,12 +25,12 @@ your source repo, evaluates as much as it can statically (locals, inputs,
 function calls, Terragrunt cascade), and dumps the result as 4 Parquet
 tables you can join in DuckDB:
 
-| Table | Rows |
-| ----- | ---- |
-| `resources.parquet` | Every `resource`, `data`, `provider`, `module`, `variable`, `local`, `output` row. |
+| Table                  | Rows                                                                                                               |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| `resources.parquet`    | Every `resource`, `data`, `provider`, `module`, `variable`, `local`, `output` row.                                 |
 | `dependencies.parquet` | Inferred + explicit dependency edges (`attr_ref`, `explicit_depends_on`, `module_input`, `terragrunt_dependency`). |
-| `components.parquet` | One row per discovered component with summary counts. |
-| `modules.parquet` | One row per distinct module source with `call_count`. |
+| `components.parquet`   | One row per discovered component with summary counts.                                                              |
+| `modules.parquet`      | One row per distinct module source with `call_count`.                                                              |
 
 Plus `workspace.manifest.json` with SHA-256 hashes for reproducibility.
 
@@ -39,7 +39,7 @@ Plus `workspace.manifest.json` with SHA-256 hashes for reproducibility.
 ```sh
 cargo install --path apps/cli --locked
 # or, after publish:
-cargo install tfparser-cli
+cargo install tfparser
 ```
 
 ## Quickstart
@@ -121,15 +121,15 @@ guide at [`docs/dev-guide.en.md`](./docs/dev-guide.en.md).
 
 ## Status
 
-| Milestone | Phase | Status |
-| --------- | ----- | ------ |
-| M0 — schema-locked Parquet output | 1–3 | ✅ |
-| M1 — evaluator (locals / vars / stdlib) | 4 | ✅ |
-| M2 — module expansion (count / for_each) | 5 | ✅ |
-| M3 — Terragrunt cascade | 6 | ✅ |
-| M4 — provider/account/region resolver | 7 | ✅ |
-| M5 — dependency graph + secondary tables | 8 | ✅ |
-| M6 — hardening + benches + docs | 9 | ✅ |
+| Milestone                                | Phase | Status |
+| ---------------------------------------- | ----- | ------ |
+| M0 — schema-locked Parquet output        | 1–3   | ✅      |
+| M1 — evaluator (locals / vars / stdlib)  | 4     | ✅      |
+| M2 — module expansion (count / for_each) | 5     | ✅      |
+| M3 — Terragrunt cascade                  | 6     | ✅      |
+| M4 — provider/account/region resolver    | 7     | ✅      |
+| M5 — dependency graph + secondary tables | 8     | ✅      |
+| M6 — hardening + benches + docs          | 9     | ✅      |
 
 See [`./specs/`](./specs/) for the full design set and
 [`./specs/91-impl-plan.md`](./specs/91-impl-plan.md) for the build order.
@@ -139,12 +139,12 @@ See [`./specs/`](./specs/) for the full design set and
 End-to-end parse on the `large-monorepo` fixture (~30 components, ~280
 resource rows) on Apple M-series:
 
-| Phase | Median |
-| ----- | ------ |
-| Discovery | ~2 ms |
-| Loader | ~3 ms |
-| Evaluator | ~63 µs |
-| Exporter | ~30 ms |
+| Phase          | Median    |
+| -------------- | --------- |
+| Discovery      | ~2 ms     |
+| Loader         | ~3 ms     |
+| Evaluator      | ~63 µs    |
+| Exporter       | ~30 ms    |
 | **End-to-end** | **~8 ms** |
 
 Run `make bench` to repeat the numbers locally; `make bench-save-baseline`

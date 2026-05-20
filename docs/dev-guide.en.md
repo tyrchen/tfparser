@@ -9,7 +9,7 @@
 ```text
 .
 ├── apps/
-│   └── cli/                tfparser-cli — thin wrapper around tfparser-core
+│   └── cli/                tfparser — thin wrapper around tfparser-core
 ├── crates/
 │   └── core/               tfparser-core — the library
 │       ├── examples/       runnable end-to-end demos
@@ -76,15 +76,15 @@ let (workspace, report) = parser.parse_and_export(&export)?;
 Below `Parser` the pipeline trait + stage primitives are reachable directly
 when you want to override one phase or run the parts independently:
 
-| Want | Type / fn |
-| ---- | --------- |
-| Replace the whole flow in tests | impl [`Pipeline`](../crates/core/src/pipeline.rs) |
-| Just discovery | [`FsDiscoverer`](../crates/core/src/discovery) |
-| Just the HCL loader | [`HclEditLoader`](../crates/core/src/loader) |
-| Just the evaluator | [`HclEvaluator`](../crates/core/src/eval) |
-| Just the Terragrunt resolver | [`FsTerragruntResolver`](../crates/core/src/terragrunt) |
-| Just the provider resolver | [`DefaultProviderResolver`](../crates/core/src/provider) |
-| Just the exporter | [`ParquetExporter`](../crates/core/src/exporter) |
+| Want                            | Type / fn                                                |
+| ------------------------------- | -------------------------------------------------------- |
+| Replace the whole flow in tests | impl [`Pipeline`](../crates/core/src/pipeline.rs)        |
+| Just discovery                  | [`FsDiscoverer`](../crates/core/src/discovery)           |
+| Just the HCL loader             | [`HclEditLoader`](../crates/core/src/loader)             |
+| Just the evaluator              | [`HclEvaluator`](../crates/core/src/eval)                |
+| Just the Terragrunt resolver    | [`FsTerragruntResolver`](../crates/core/src/terragrunt)  |
+| Just the provider resolver      | [`DefaultProviderResolver`](../crates/core/src/provider) |
+| Just the exporter               | [`ParquetExporter`](../crates/core/src/exporter)         |
 
 Every trait above is `Send + Sync` and returns `Result<_, _>` with phase-
 specific error types — you can swap stubs in tests without unsafe magic.
@@ -125,7 +125,7 @@ A faster inner loop:
 
 ```sh
 cargo test -p tfparser-core              # core tests only
-cargo test -p tfparser-cli               # CLI integration tests
+cargo test -p tfparser               # CLI integration tests
 cargo test -p tfparser-core --doc        # doctests
 cargo clippy --workspace --all-targets -- -D warnings
 cargo +nightly fmt --all
@@ -133,13 +133,13 @@ cargo +nightly fmt --all
 
 ## 5. Repo invariants the workspace lints enforce
 
-| Lint | Why |
-| ---- | --- |
-| `unsafe_code = forbid` | Soundness contract; no `unsafe` ever. |
+| Lint                                                              | Why                                                                |
+| ----------------------------------------------------------------- | ------------------------------------------------------------------ |
+| `unsafe_code = forbid`                                            | Soundness contract; no `unsafe` ever.                              |
 | `unwrap_used` / `expect_used` / `panic` / `indexing_slicing` deny | No reachable panics from external input. Tests opt out per-module. |
-| `print_stdout` / `print_stderr` deny | Use `tracing` everywhere except CLI / examples. |
-| `missing_docs` warn | Public items must be documented. |
-| `pedantic` warn | Spec preference; the few `#[allow]`s are justified in code. |
+| `print_stdout` / `print_stderr` deny                              | Use `tracing` everywhere except CLI / examples.                    |
+| `missing_docs` warn                                               | Public items must be documented.                                   |
+| `pedantic` warn                                                   | Spec preference; the few `#[allow]`s are justified in code.        |
 
 See the [project CLAUDE.md](../CLAUDE.md) for the long-form rationale.
 
