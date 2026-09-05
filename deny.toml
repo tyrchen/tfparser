@@ -69,13 +69,6 @@ feature-depth = 1
 #db-urls = ["https://github.com/rustsec/advisory-db"]
 # A list of advisory IDs to ignore. Note that ignored advisories will still
 # output a note when they are encountered.
-ignore = [
-  # `paste` is unmaintained (RUSTSEC-2024-0436). It is pulled in transitively
-  # through `parquet@58.3.0 → paste@1.0.15`. There is no safe upgrade upstream;
-  # arrow-rs has not yet replaced its use of `paste`. Revisit when arrow-rs
-  # ≥ 59 (or any later release dropping the dep) ships.
-  { id = "RUSTSEC-2024-0436", reason = "unmaintained transitive dep via parquet; no upstream fix yet" },
-]
 # If this is true, then cargo deny will use the git executable to fetch advisory database.
 # If this is false, then it uses a built-in git library.
 # Setting this to true can be helpful if you have special authentication requirements that cargo-deny does not support.
