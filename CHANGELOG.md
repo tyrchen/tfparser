@@ -3,6 +3,17 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 ---
+## [tfparser-v0.1.1](https://github.com/compare/tfparser-v0.1.0..tfparser-v0.1.1) - 2026-09-05
+
+### Miscellaneous Chores
+
+- upgrade deps - ([d428822](https://github.com/commit/d42882206a442bd1d9e74699e6f1dfa358ed214b)) - Tyr Chen
+
+### Other
+
+- Update CHANGELOG.md - ([7fcb358](https://github.com/commit/7fcb3583e97bdff27eabd33c1e0a26ec4e1e2aed)) - Tyr Chen
+
+---
 ## [tfparser-v0.1.0] - 2026-05-20
 
 ### Miscellaneous Chores
